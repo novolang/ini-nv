@@ -1,0 +1,209 @@
+// inicfg.nv — an INI document as a `config-core-nv` value, so that
+// `config-nv`'s ini adapter is one call.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// WHY THIS MODULE IS HERE AND NOT IN `config-nv`.  That package's
+// existing adapters — TOML, YAML, JSON — live there because it already
+// depends on the two parsers and putting them in `config-core-nv` would
+// drag toml-nv, yaml-nv and calendar-nv into the closure of a package
+// whose subject is precedence.  The dependency runs the other way here:
+// `config-core-nv` has no dependencies at all, so ini-nv can take it
+// and the cost to a consumer who only wanted to read a file is one
+// `core` package of pure arithmetic.  What it buys is that `config-nv`
+// gains its third format by calling one function rather than by
+// carrying a second copy of the mapping rules below.
+//
+// THE THREE DECISIONS THE MAPPING MAKES, all of them visible in the
+// signatures because all three are places a reader could reasonably
+// have expected the other answer:
+//
+//   THE FALLBACK IS NOT FLATTENED BY DEFAULT.  configparser's
+//   `[DEFAULT]` supplies a value to every section that lacks one, and
+//   copying those values into each section would make a file's own
+//   fallback outrank a LATER LAYER's explicit setting once
+//   `config-core-nv` merges — a default from `/etc` beating a value
+//   from the environment, which is precisely backwards.  So
+//   `IniDefaultsAsSection` is the default and `IniDefaultsFlattened`
+//   is there for a caller who is not layering at all.
+//
+//   A SECTION NAME IS ONE KEY, dots included.  `[a.b]` becomes the key
+//   `"a.b"` and not a table `a` holding a table `b`.  INI has no
+//   nesting, two tools that both write `[a.b]` mean different things by
+//   it, and a tree built by splitting would silently merge two sections
+//   that a reader can see are distinct.
+//
+//   EVERY VALUE IS A STRING UNLESS THE CALLER ASKS OTHERWISE.  INI has
+//   no types.  `to_config` answers `CfgStr` throughout, and
+//   `to_config_typed` runs each one through `config-core-nv`'s own
+//   `infer_scalar` — the same rule its environment layer uses, which is
+//   the right comparison because an INI value and an environment
+//   variable are both text somebody typed.
+
+use cfgvalue
+use inidoc
+use inierror
+use iniinterp
+
+// How deep a tree an INI document can be: sections, then keys.
+//
+// A constant rather than a sentence, because it is what a caller
+// checking whether `from_config` will accept a tree compares against.
+pub const CONFIG_DEPTH = 2
+
+// What to do with the fallback section on the way into the tree.
+//
+// ```novo
+// use inicfg
+//
+// fn main() [io]
+//     println(inicfg.defaults_name(IniDefaultsAsSection))
+// ```
+pub enum IniDefaults
+    // `[DEFAULT]` becomes an ordinary table under its own name, and
+    // nothing inherits from it.  The default, and the only one that is
+    // safe under a layered merge.
+    IniDefaultsAsSection
+    // Its keys are copied into every section that does not declare
+    // them, and the section itself is dropped.  configparser's reading,
+    // for a caller reading one file and merging nothing.
+    IniDefaultsFlattened
+    // Dropped entirely.  For a caller that resolves the fallbacks
+    // itself through `inidoc.get` and wants the tree to hold only what
+    // each section really said.
+    IniDefaultsDropped
+
+// The policy's name, in the spelling a message uses.
+//
+// `"as-section"`, `"flattened"`, `"dropped"`.
+//
+// ```novo
+// use inicfg
+//
+// fn main() [io]
+//     println(inicfg.defaults_name(IniDefaultsFlattened))
+// ```
+pub fn defaults_name(policy: IniDefaults) -> Str []
+    todo("ini-nv.inicfg.defaults_name")
+
+// The document as a `config-core-nv` tree, every value a string.
+//
+// **The one call `config-nv`'s ini adapter makes.**  A table of
+// sections, each a table of keys, each a `CfgStr` holding the value
+// after interpolation.  A key that occurred several times under
+// `IniDupKeepAll` is a `CfgList` of its values in order — which is the
+// one place the tree is not two levels deep, and the one INI construct
+// that genuinely is a list.
+//
+// The fault is interpolation's: a dangling reference or a cycle.  Pass
+// `IniInterpNone` and it cannot fail, which is what a caller reading a
+// format with no interpolation should do.
+//
+// ```novo
+// use cfgvalue
+// use inicfg
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[web]\nport = 8080\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             match inicfg.to_config(doc, IniInterpNone, IniDefaultsAsSection)
+//                 Ok(v)  => println(cfgvalue.kind_name(cfgvalue.kind_of(v)))
+//                 Err(_) => println("could not expand")
+// ```
+pub fn to_config(doc: inidoc.IniDocument, style: iniinterp.IniInterpolation,
+                 policy: IniDefaults) -> Result<cfgvalue.ConfigValue, inierror.IniFault> []
+    todo("ini-nv.inicfg.to_config")
+
+// The same tree, with each scalar read as a type.
+//
+// `"true"` becomes `CfgBool`, `"8080"` becomes `CfgInt`, `"1.5"`
+// becomes `CfgFloat`, `"null"` becomes `CfgNull`, everything else stays
+// `CfgStr` — which is `config-core-nv.cfgvalue.infer_scalar` and not a
+// second rule.  Using its rule rather than one of our own is the point:
+// a port number that arrives from an INI file and one that arrives from
+// the environment then reach `get_int` the same way, and a merge that
+// compared them would be comparing two of the same thing.
+//
+// ```novo
+// use cfgvalue
+// use inicfg
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[web]\nport = 8080\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             match inicfg.to_config_typed(doc, IniInterpNone, IniDefaultsAsSection)
+//                 Ok(v)  => println(cfgvalue.kind_name(cfgvalue.kind_of(v)))
+//                 Err(_) => println("could not expand")
+// ```
+pub fn to_config_typed(doc: inidoc.IniDocument, style: iniinterp.IniInterpolation,
+                       policy: IniDefaults) -> Result<cfgvalue.ConfigValue, inierror.IniFault> []
+    todo("ini-nv.inicfg.to_config_typed")
+
+// One section as a table, for a caller that wants a single section
+// merged rather than the whole file.
+//
+// The case a program with a `[tool.myapp]`-shaped file has: one
+// section is its configuration and the rest of the file belongs to
+// somebody else.
+//
+// ```novo
+// use cfgvalue
+// use inicfg
+// use inidoc
+//
+// fn main() [io]
+//     let t = inicfg.section_to_config(inidoc.empty(), "web", IniInterpNone)
+//     match t
+//         Ok(v)  => println(cfgvalue.kind_name(cfgvalue.kind_of(v)))
+//         Err(_) => println("could not expand")
+// ```
+pub fn section_to_config(doc: inidoc.IniDocument, section: Str,
+                         style: iniinterp.IniInterpolation) -> Result<cfgvalue.ConfigValue, inierror.IniFault> []
+    todo("ini-nv.inicfg.section_to_config")
+
+// A tree back out as a document, or the reason it has no INI spelling.
+//
+// The inverse, for a `--json`-to-`--ini` conversion and for a program
+// that assembled its configuration in code and wants to write the file
+// a person will edit next.  Three trees have no spelling and each is a
+// named refusal:
+//
+//   a tree deeper than `CONFIG_DEPTH`     INI has no nesting
+//   a list holding a table or a list      a repeated key holds scalars
+//   a scalar at the root                  every value is in a section
+//
+// `CfgNull` becomes an empty value, because that is the only thing an
+// INI file can write and reading it back gives `CfgStr("")` — so this
+// is NOT a round trip for a document with a null in it, and a caller
+// that needs one should say so in its own format.
+//
+// ```novo
+// use cfgvalue
+// use inicfg
+//
+// fn main() [io]
+//     match inicfg.from_config(cfgvalue.empty_table())
+//         Ok(_)  => println("converted")
+//         Err(_) => println("no ini spelling for that tree")
+// ```
+pub fn from_config(v: cfgvalue.ConfigValue) -> Result<inidoc.IniDocument, inierror.IniFault> []
+    todo("ini-nv.inicfg.from_config")
+
+// Whether a tree has an INI spelling, without building the document.
+//
+// The check a caller makes before it offers a `--format=ini` flag.
+//
+// ```novo
+// use cfgvalue
+// use inicfg
+//
+// fn main() [io]
+//     let ok = inicfg.is_writable(cfgvalue.empty_table())
+//     println("${ok}")
+// ```
+pub fn is_writable(v: cfgvalue.ConfigValue) -> Bool []
+    todo("ini-nv.inicfg.is_writable")

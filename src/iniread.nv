@@ -1,0 +1,251 @@
+// iniread.nv — text into a document, and the dialect switches that
+// decide what the text meant.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// INI HAS NO SPECIFICATION, which is the whole reason this module is
+// mostly options.  Almost every line of an INI file has a reading under
+// some implementation and a different reading under another: `a = b ;c`
+// is a value of `b ;c` to Python and a value of `b` to rust-ini; `a:b`
+// is a key-value pair to configparser and a syntax error to half the C
+// parsers; `[a]` twice is an error, a merge, or a second section
+// depending on who you ask.  A package that picked one set of answers
+// would be right about one third of the files it met.
+//
+// So the dialect is a VALUE the caller picks, and the three named
+// constructors are the three answers somebody already depends on:
+// `defaults()` is what this package would choose, `configparser()` is
+// what Python does, `rust_ini()` is what the Rust crate does.  A caller
+// reading a file written by a particular tool names that tool's
+// dialect and gets that tool's reading.
+//
+// WHAT IS NOT AN OPTION, and each is a refusal rather than an omission:
+// there is no "value type" inference — every value is a string, and
+// `config-core-nv`'s `infer_scalar` is where a string becomes typed;
+// there is no nesting, because `[a.b]` is a section whose NAME contains
+// a dot and reading it as a tree would silently merge two files that
+// meant different things; and there is no encoding option, because
+// novo-lang's `Str` is UTF-8.
+
+use inidoc
+use inierror
+
+// What to do about the same key, or the same section, twice.
+//
+// Four answers because all four are somebody's default.  The policy is
+// per DOCUMENT rather than per section: a file that wanted one rule for
+// one section and another for the next is a file with two formats in
+// it.
+pub enum IniDuplicates
+    // Refuse the document — configparser's `strict=True`, its default
+    // since 3.2.
+    IniDupRefuse
+    // The first occurrence stands; every later one is dropped.  What
+    // most hand-written C parsers do.
+    IniDupFirstWins
+    // The later occurrence replaces the earlier — configparser with
+    // `strict=False`.  For a section, its entries are merged into the
+    // one already open rather than a second section being started.
+    IniDupLastWins
+    // Every occurrence is kept, in order, and `inidoc.get_all`
+    // answers them.  rust-ini's multi-value properties, and what a
+    // systemd unit's repeated `After=` means.
+    IniDupKeepAll
+
+// The dialect.
+//
+// Every field is a place two real implementations disagree; the
+// comments say which, so a caller choosing can see what they are
+// choosing between rather than guessing from a field name.
+pub struct IniOptions
+    // Which characters separate a key from its value.  `[61, 58]` —
+    // `=` and `:` — is configparser's default and this package's.
+    // `[61]` alone is what a caller reading a `.env`-adjacent file
+    // wants, because a URL's `https://` should not split a key.
+    delimiters: [Int]
+    // Which characters start a WHOLE-LINE comment.  `[35, 59]` — `#`
+    // and `;` — everywhere.
+    comment_prefixes: [Int]
+    // Which characters start an INLINE comment, after a value.  EMPTY
+    // by default, which is configparser's behaviour and surprises
+    // everybody: `url = http://x/#frag` keeps its fragment.  rust-ini
+    // strips `;`, so `rust_ini()` sets this to `[59]`.  A file written
+    // by one and read by the other loses or keeps text, which is why
+    // this is a switch and not a rule.
+    inline_comment_prefixes: [Int]
+    // Join a line that is indented further than its key onto the value
+    // above it, separated by a newline.  configparser's behaviour, and
+    // how a multi-line value is written.
+    continuations: Bool
+    // Lowercase every key on the way in — configparser's `optionxform`.
+    // FALSE here by default, because a round trip that changes a key is
+    // not a round trip; `configparser()` sets it.
+    lowercase_keys: Bool
+    // Accept a key-value line before any section header, and put it in
+    // a section of this name.  `""` refuses such a line with
+    // `IniKeyBeforeSection`, which is configparser's behaviour.  A
+    // `.gitconfig` fragment or a `pip.conf` snippet needs it set.
+    implicit_section: Str
+    // Accept a key with a delimiter and nothing after it as a key whose
+    // value is the empty string.  configparser's `allow_no_value` is
+    // the stronger form — a key with NO delimiter at all — and is the
+    // next field.
+    allow_empty_values: Bool
+    // Accept a line that is a bare key with no delimiter, giving it a
+    // value of `""`.  configparser's `allow_no_value=True`, and what a
+    // `.desktop` or an `smb.conf` flag line needs.
+    allow_no_value: Bool
+    // What to do about the same key twice in one section.
+    duplicate_keys: IniDuplicates
+    // What to do about the same section header twice.
+    duplicate_sections: IniDuplicates
+    // The section whose keys are a fallback for every other section.
+    // `"DEFAULT"` is configparser's; `""` turns the fallback off, which
+    // is rust-ini's behaviour and what a systemd unit needs.
+    default_section: Str
+    // Strip whitespace from both ends of every value.  True in every
+    // implementation; here because a caller reading a file whose values
+    // are fixed-width columns needs it off.
+    trim_values: Bool
+
+// What this package would choose: both delimiters, both comment
+// characters, no inline comments, continuations on, keys preserved,
+// duplicates refused, `[DEFAULT]` as the fallback.
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     println(iniread.defaults().default_section)
+// ```
+pub fn defaults() -> IniOptions []
+    todo("ini-nv.iniread.defaults")
+
+// What Python's `configparser` does with its own defaults.
+//
+// The differences from `defaults()`, in full: keys are lowercased, a
+// key before the first section header is refused, and the fallback
+// section is `[DEFAULT]`.  Everything else already matches, because
+// `defaults()` started from configparser.
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     println("${iniread.configparser().lowercase_keys}")
+// ```
+pub fn configparser() -> IniOptions []
+    todo("ini-nv.iniread.configparser")
+
+// What the `rust-ini` crate does with its own defaults.
+//
+// The differences from `defaults()`: `;` starts an inline comment,
+// duplicate keys are all kept, there is no fallback section, and a key
+// before the first header goes into the unnamed section.
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     println(iniread.rust_ini().default_section)
+// ```
+pub fn rust_ini() -> IniOptions []
+    todo("ini-nv.iniread.rust_ini")
+
+// Read a whole file's text into a document.
+//
+// **The load-bearing call of the reading half.**  Text and a dialect
+// in, a document with its trivia in, or the first line that had no
+// reading under that dialect.
+//
+// ```novo
+// use inidoc
+// use iniread
+//
+// fn main() [io]
+//     match iniread.parse("[web]\nport = 8080\n", iniread.defaults())
+//         Err(f)  => println("${f.line}")
+//         Ok(doc) => println(inidoc.get(doc, "web", "port") ?? "unset")
+// ```
+pub fn parse(text: Str, options: IniOptions) -> Result<inidoc.IniDocument, inierror.IniFault> []
+    todo("ini-nv.iniread.parse")
+
+// Read with `defaults()`, for a caller who has no opinion.
+//
+// ```novo
+// use inidoc
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[web]\nport = 8080\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) => println(inidoc.get(doc, "web", "port") ?? "unset")
+// ```
+pub fn read(text: Str) -> Result<inidoc.IniDocument, inierror.IniFault> []
+    todo("ini-nv.iniread.read")
+
+// What one line is, before any policy is applied.
+//
+// Public because it is how a caller writes a reader this package does
+// not have — a `.gitconfig`, whose section headers take a subsection
+// in quotes — without re-deriving the comment and continuation rules.
+pub enum IniLineKind
+    // A line with nothing but whitespace on it.
+    IniBlankLine
+    // A whole-line comment, without its prefix character.
+    IniCommentLine(text: Str)
+    // A section header and the inline comment after it, if any.
+    IniSectionLine(name: Str, comment: ?Str)
+    // A key, its value and the inline comment after it, if any.
+    IniEntryLine(key: Str, value: Str, comment: ?Str, delimiter: Int)
+    // A line indented further than the key above it.
+    IniContinuationLine(text: Str)
+
+// Classify one line under a dialect.
+//
+// The line WITHOUT its terminator.  It does not decide whether a
+// continuation is legal — that needs the line above — so
+// `IniContinuationLine` here only means "indented, and not anything
+// else".
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     match iniread.classify("[web]", iniread.defaults())
+//         IniSectionLine(name, _) => println(name)
+//         _                       => println("not a section header")
+// ```
+pub fn classify(line: Str, options: IniOptions) -> IniLineKind []
+    todo("ini-nv.iniread.classify")
+
+// Whether a string is usable as a section name under a dialect.
+//
+// False for a name holding `]`, a newline, or — when the dialect has
+// no inline comments off — nothing else.  `iniwrite` calls it before
+// it writes a header a caller supplied.
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     let ok = iniread.is_section_name("web", iniread.defaults())
+//     println("${ok}")
+// ```
+pub fn is_section_name(name: Str, options: IniOptions) -> Bool []
+    todo("ini-nv.iniread.is_section_name")
+
+// Whether a string is usable as a key under a dialect.
+//
+// False for a key holding any of the dialect's delimiters, starting
+// with any of its comment prefixes, or holding a newline.
+//
+// ```novo
+// use iniread
+//
+// fn main() [io]
+//     let ok = iniread.is_key("port", iniread.defaults())
+//     println("${ok}")
+// ```
+pub fn is_key(key: Str, options: IniOptions) -> Bool []
+    todo("ini-nv.iniread.is_key")

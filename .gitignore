@@ -1,0 +1,14 @@
+# Build outputs.
+_novo/
+
+# The built package binary — a library package still produces one,
+# because its manifest needs a `main`.
+ini-nv
+
+# Generated from the sources by `novo doc`; a committed copy is a
+# second original.
+APIDOC.md
+
+# Resolved deps.  Written by the build from the one registry range in
+# the manifest.
+novo.lock

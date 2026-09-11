@@ -1,0 +1,406 @@
+// inidoc.nv — the document, with everything that was in the file still
+// in it, and the edits that keep it that way.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// THE DOCUMENT KEEPS THE TRIVIA, and that is the decision every other
+// one here follows from.  An INI file is almost always a file a PERSON
+// wrote and a person will read again: it has comments explaining why a
+// timeout is 45, blank lines grouping related keys, and an order that
+// means something.  A library that parsed it into a map of maps and
+// wrote it back out would hand that person a diff touching every line.
+//
+// So a section holds its entries IN ORDER, an entry holds the comment
+// lines that were written above it and the inline comment written after
+// it, and `iniwrite.round_trip` is the identity on a file nobody
+// changed.  The cost is that a lookup is a scan rather than a hash
+// probe, which for a configuration file of forty keys is not a cost.
+//
+// THIS MODULE IS ALSO WHERE EDITING LIVES, for the same reason: `set`
+// changes an entry's value and leaves its comments, its position and
+// its spelling of the delimiter alone.  A caller that wants a map of
+// maps and does not care builds one with `keys` and `get`.
+//
+// THE DEFAULT SECTION IS configparser's, and it is not a section like
+// the others: `[DEFAULT]` supplies a fallback for every other section,
+// so `get(doc, "web", "timeout")` finds `timeout` in `[DEFAULT]` when
+// `[web]` has none.  `get_local` is the same lookup without the
+// fallback, for a caller that needs to know where a value really came
+// from.  `IniOptions.default_section` renames it; `""` turns it off.
+
+use inierror
+
+// The name `[DEFAULT]` has, unless the caller renames it.
+//
+// A constant rather than a literal because a program writing a
+// `[DEFAULT]` section should not have to know that this package spells
+// it in capitals, and configparser's own spelling is what a file in the
+// wild carries.
+pub const DEFAULT_SECTION = "DEFAULT"
+
+// One key and its value, with the trivia that was around it.
+//
+// `raw` is the value as it was written, before any interpolation;
+// `iniinterp` is what turns it into the value a program wants, and
+// `IniEntry` never holds an interpolated result — a document whose
+// entries had already been expanded could not be written back out.
+pub struct IniEntry
+    // The key as it was written.  Not lowercased: configparser
+    // lowercases option names by default and this package does not,
+    // because a round trip that changes a key is not a round trip.
+    // `iniread.configparser_compatible()` is the other behaviour.
+    key: Str
+    // The value as written, with the surrounding whitespace stripped
+    // and a line continuation already joined.  Still holds `%(x)s` and
+    // `${a:b}` if it had them.
+    raw: Str
+    // The comment lines written directly above this entry, in order,
+    // without their prefix character.  Empty when there were none.
+    comments_above: [Str]
+    // The comment written after the value on the same line, without
+    // its prefix character.  `None` when there was none — which is not
+    // the same as an empty one, because `key = v ;` and `key = v` are
+    // different bytes.
+    comment_after: ?Str
+    // Which delimiter the line used: `61` for `=`, `58` for `:`.  Kept
+    // so a rewrite does not convert a file from one to the other.
+    delimiter: Int
+    // The 1-based line the key was on, for a diagnostic.
+    line: Int
+
+// One section, its entries in the order they were written.
+pub struct IniSection
+    // The name between the brackets, as written.  Section names are
+    // case-sensitive here and in both reference implementations.
+    name: Str
+    entries: [IniEntry]
+    // The comment lines written directly above the section header.
+    comments_above: [Str]
+    // The comment written after the header on the same line.
+    comment_after: ?Str
+    // The 1-based line the header was on.  `0` for the implicit
+    // section that holds keys written before any header.
+    line: Int
+
+// A parsed file.
+//
+// The sections in the order they appeared, plus whatever trailing
+// comments came after the last entry — which a round trip has to keep
+// and which belong to no section.
+pub struct IniDocument
+    sections: [IniSection]
+    // Comment lines after the last entry of the last section, in
+    // order.  A file that ends with a commented-out block has it here.
+    trailing_comments: [Str]
+    // The name this document treats as the fallback section.  Carried
+    // on the document rather than asked for at every lookup, so that
+    // `get` cannot be called with one spelling and `set` with another.
+    default_section: Str
+
+// An empty document with configparser's default section name.
+//
+// The starting point for a program building a file rather than reading
+// one.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     println("${list.len(inidoc.empty().sections)}")
+// ```
+pub fn empty() -> IniDocument []
+    todo("ini-nv.inidoc.empty")
+
+// An empty document that treats `name` as its fallback section.
+//
+// `""` turns the fallback off entirely, which is rust-ini's behaviour
+// and what a caller reading a `.gitconfig` or a systemd unit wants —
+// neither format has a `[DEFAULT]` and both may have a section really
+// called that.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     println(inidoc.empty_with("").default_section)
+// ```
+pub fn empty_with(name: Str) -> IniDocument []
+    todo("ini-nv.inidoc.empty_with")
+
+// The section names, in the order they were written, the default
+// section included if it is present.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     println("${list.len(inidoc.section_names(inidoc.empty()))}")
+// ```
+pub fn section_names(doc: IniDocument) -> [Str] []
+    todo("ini-nv.inidoc.section_names")
+
+// One section by name, or `None`.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     match inidoc.section(inidoc.empty(), "web")
+//         Some(s) => println(s.name)
+//         None    => println("no such section")
+// ```
+pub fn section(doc: IniDocument, name: Str) -> ?IniSection []
+    todo("ini-nv.inidoc.section")
+
+// Whether the document has a section with this name.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let shown = inidoc.has_section(inidoc.empty(), "web")
+//     println("${shown}")
+// ```
+pub fn has_section(doc: IniDocument, name: Str) -> Bool []
+    todo("ini-nv.inidoc.has_section")
+
+// The keys of a section, in order, WITH the default section's keys
+// that it does not shadow.
+//
+// configparser's `options()`: a caller iterating a section sees what a
+// lookup would find, which includes the fallbacks.  `local_keys` is
+// the section's own.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     let shown = list.len(inidoc.keys(inidoc.empty(), "web"))
+//     println("${shown}")
+// ```
+pub fn keys(doc: IniDocument, section_name: Str) -> [Str] []
+    todo("ini-nv.inidoc.keys")
+
+// The keys a section itself declares, in order, with no fallback.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     let shown = list.len(inidoc.local_keys(inidoc.empty(), "web"))
+//     println("${shown}")
+// ```
+pub fn local_keys(doc: IniDocument, section_name: Str) -> [Str] []
+    todo("ini-nv.inidoc.local_keys")
+
+// One raw value, falling back to the default section.
+//
+// RAW: `%(x)s` and `${a:b}` come back as written.  `iniinterp.value`
+// is the one that expands them, and the split is deliberate — a
+// program editing a file wants what was written, and a program reading
+// a setting wants what it means.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     println(inidoc.get(inidoc.empty(), "web", "host") ?? "unset")
+// ```
+pub fn get(doc: IniDocument, section_name: Str, key: Str) -> ?Str []
+    todo("ini-nv.inidoc.get")
+
+// One raw value from this section only, with no fallback.
+//
+// What a caller asking "did THIS section set it?" needs — a merge that
+// could not tell a fallback from a setting would attribute every
+// default to every section.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     println(inidoc.get_local(inidoc.empty(), "web", "host") ?? "unset")
+// ```
+pub fn get_local(doc: IniDocument, section_name: Str, key: Str) -> ?Str []
+    todo("ini-nv.inidoc.get_local")
+
+// Every value a key has in a section, in order.
+//
+// rust-ini's `get_all`, and the reason `IniDupKeepAll` is a policy: a
+// `.desktop` file or an `authorized_keys`-style list writes the same
+// key several times on purpose.  Under any other policy this answers a
+// list of one, or of none.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     let all = inidoc.get_all(inidoc.empty(), "unit", "After")
+//     println("${list.len(all)}")
+// ```
+pub fn get_all(doc: IniDocument, section_name: Str, key: Str) -> [Str] []
+    todo("ini-nv.inidoc.get_all")
+
+// One entry, with its trivia, from this section only.
+//
+// For a caller that needs the comment or the line number — a linter, a
+// migration tool, an editor.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     match inidoc.entry(inidoc.empty(), "web", "host")
+//         Some(e) => println("${e.line}")
+//         None    => println("unset")
+// ```
+pub fn entry(doc: IniDocument, section_name: Str, key: Str) -> ?IniEntry []
+    todo("ini-nv.inidoc.entry")
+
+// Whether a key resolves in a section, fallback included.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let shown = inidoc.has_key(inidoc.empty(), "web", "host")
+//     println("${shown}")
+// ```
+pub fn has_key(doc: IniDocument, section_name: Str, key: Str) -> Bool []
+    todo("ini-nv.inidoc.has_key")
+
+// Set a key's value, keeping everything else about it.
+//
+// The comments above it, the comment after it, its position in the
+// section and its delimiter all survive.  A key that was not there is
+// appended to the end of the section; a section that was not there is
+// appended to the end of the document.  The value is stored RAW, so a
+// caller writing `%(x)s` is writing a reference and a caller writing a
+// literal percent should call `iniinterp.escape` first.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.set(inidoc.empty(), "web", "port", "8080")
+//     println(inidoc.get(doc, "web", "port") ?? "unset")
+// ```
+pub fn set(doc: IniDocument, section_name: Str, key: Str, value: Str) -> IniDocument []
+    todo("ini-nv.inidoc.set")
+
+// Set a key and the comment lines above it in one call.
+//
+// For a program GENERATING a file that a person will read, which is
+// the other half of why the trivia is kept.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.set_with_comment(inidoc.empty(), "web", "port", "8080",
+//                                       ["the port the listener binds"])
+//     println(inidoc.get(doc, "web", "port") ?? "unset")
+// ```
+pub fn set_with_comment(doc: IniDocument, section_name: Str, key: Str, value: Str,
+                        comments: [Str]) -> IniDocument []
+    todo("ini-nv.inidoc.set_with_comment")
+
+// Remove a key from a section, with the comments that belonged to it.
+//
+// The comments go because they were ABOUT the key: a file left holding
+// an explanation of a setting nobody has is worse than one that lost
+// the explanation with the setting.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.remove(inidoc.empty(), "web", "port")
+//     let shown = inidoc.has_key(doc, "web", "port")
+//     println("${shown}")
+// ```
+pub fn remove(doc: IniDocument, section_name: Str, key: Str) -> IniDocument []
+    todo("ini-nv.inidoc.remove")
+
+// Add an empty section, or answer the document unchanged if it exists.
+//
+// ```novo
+// use std.list
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.add_section(inidoc.empty(), "web")
+//     println("${list.len(doc.sections)}")
+// ```
+pub fn add_section(doc: IniDocument, name: Str) -> IniDocument []
+    todo("ini-nv.inidoc.add_section")
+
+// Remove a section and everything in it.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.remove_section(inidoc.empty(), "web")
+//     let shown = inidoc.has_section(doc, "web")
+//     println("${shown}")
+// ```
+pub fn remove_section(doc: IniDocument, name: Str) -> IniDocument []
+    todo("ini-nv.inidoc.remove_section")
+
+// Rename a section, keeping its entries and its position.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let doc = inidoc.rename_section(inidoc.empty(), "web", "http")
+//     let shown = inidoc.has_section(doc, "http")
+//     println("${shown}")
+// ```
+pub fn rename_section(doc: IniDocument, from: Str, to: Str) -> IniDocument []
+    todo("ini-nv.inidoc.rename_section")
+
+// A second document's sections and keys laid over this one.
+//
+// Later wins, per key, and a section in neither is untouched.  The
+// trivia that survives is the WINNER's, because a comment explaining a
+// value that has been replaced explains nothing.
+//
+// This is not `config-core-nv`'s merge and does not try to be: that
+// one merges across FORMATS and this one across two files of the same
+// format, which is what a `/etc/foo.conf` plus `~/.config/foo.conf`
+// pair is.  A program that wants the layered, provenance-carrying
+// version converts both with `inicfg` and merges there.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let base = inidoc.set(inidoc.empty(), "web", "port", "80")
+//     let over = inidoc.set(inidoc.empty(), "web", "port", "8080")
+//     println(inidoc.get(inidoc.overlay(base, over), "web", "port") ?? "")
+// ```
+pub fn overlay(base: IniDocument, over: IniDocument) -> IniDocument []
+    todo("ini-nv.inidoc.overlay")
+
+// The fault a caller would get for a key that is not there.
+//
+// Here rather than in `inierror` because building it needs the
+// document's own idea of which line the section ended on, which is
+// what makes the message point at the right place.
+//
+// ```novo
+// use inidoc
+//
+// fn main() [io]
+//     let f = inidoc.missing_key_fault(inidoc.empty(), "web", "port")
+//     println("${f.line}")
+// ```
+pub fn missing_key_fault(doc: IniDocument, section_name: Str, key: Str) -> inierror.IniFault []
+    todo("ini-nv.inidoc.missing_key_fault")

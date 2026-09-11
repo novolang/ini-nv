@@ -1,0 +1,227 @@
+// iniinterp.nv — `%(name)s` and `${section:name}`, expanded as a step
+// of their own.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// INTERPOLATION IS A SEPARATE STEP, WHICH IS THE POINT OF THIS MODULE.
+// configparser expands on the way OUT of `get`, so a program that reads
+// a value, changes something else and writes the file back has silently
+// replaced every `%(home_dir)s` with the directory it happened to
+// resolve to that day.  Here `inidoc` answers the raw text, always, and
+// a caller that wants the expansion asks for it — so `parse` then
+// `render` is the identity, and a program editing somebody's file
+// cannot destroy their references by accident.
+//
+// TWO SPELLINGS, BECAUSE configparser HAS TWO.  `%(name)s` is
+// `BasicInterpolation`: the name is a key, looked up in the same
+// section and then in the fallback section.  `${section:name}` is
+// `ExtendedInterpolation`: the section may be named, and `${name}`
+// without a colon is the same section.  A document uses one or the
+// other, never both, which is why the style is an argument rather than
+// a pair of flags — under `IniInterpBasic` a `$` is an ordinary
+// character, and under `IniInterpExtended` a `%` is.
+//
+// A CYCLE IS A FAULT, NOT A DEPTH LIMIT REACHED.  `a = %(b)s` and
+// `b = %(a)s` is a mistake somebody made, and the useful answer names
+// it: `IniInterpolationCycle` at the line of the value that closed the
+// loop.  The depth limit behind it exists for the case a cycle check
+// cannot catch cheaply — a chain a thousand long — and reaching it
+// answers the same fault, because to a caller the two are one problem.
+
+use inidoc
+use inierror
+
+// How deep a chain of references may go before it is called a cycle.
+//
+// Ten, which is more than any real file and small enough that the
+// error arrives while a person still remembers what they typed.
+pub const INTERPOLATION_DEPTH_LIMIT = 10
+
+// Which spelling a document uses.
+//
+// ```novo
+// use iniinterp
+//
+// fn main() [io]
+//     println("${iniinterp.style_name(IniInterpBasic)}")
+// ```
+pub enum IniInterpolation
+    // No expansion at all: every value is its own literal text.  What
+    // a caller reading a systemd unit or a `.gitconfig` wants, because
+    // neither format has interpolation and both use `%` and `$` for
+    // other things.
+    IniInterpNone
+    // configparser's `BasicInterpolation`: `%(name)s`, looked up in
+    // this section then the fallback.  `%%` is a literal percent.
+    IniInterpBasic
+    // configparser's `ExtendedInterpolation`: `${name}` in this
+    // section, `${section:name}` anywhere.  `$$` is a literal dollar.
+    IniInterpExtended
+
+// One reference found in a raw value.
+//
+// `section` is the empty string for a reference that did not name one,
+// which under either style means "this section, then the fallback".
+pub struct IniReference
+    section: Str
+    key: Str
+    // The byte offset of the reference's first character within the
+    // raw value, so a fault can point inside a long string.
+    at: Int
+    // How many bytes the reference occupies, `%(` and `)s` included.
+    length: Int
+
+// The style's name, in the spelling a message uses.
+//
+// `"none"`, `"basic"`, `"extended"`.
+//
+// ```novo
+// use iniinterp
+//
+// fn main() [io]
+//     println(iniinterp.style_name(IniInterpExtended))
+// ```
+pub fn style_name(style: IniInterpolation) -> Str []
+    todo("ini-nv.iniinterp.style_name")
+
+// One value, resolved.
+//
+// The lookup `inidoc.get` does, then every reference in the result
+// expanded, recursively, to `INTERPOLATION_DEPTH_LIMIT`.  `None` from
+// the lookup is `None` here; a reference that resolves to nothing is
+// `IniUnknownReference`, which is a different answer on purpose — a
+// key that is absent and a key whose value mentions an absent key are
+// different mistakes.
+//
+// ```novo
+// use iniinterp
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[p]\nroot = /srv\ndata = %(root)s/data\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             match iniinterp.value(doc, "p", "data", IniInterpBasic)
+//                 Ok(v)  => println(v ?? "unset")
+//                 Err(_) => println("could not expand")
+// ```
+pub fn value(doc: inidoc.IniDocument, section: Str, key: Str,
+             style: IniInterpolation) -> Result<?Str, inierror.IniFault> []
+    todo("ini-nv.iniinterp.value")
+
+// A raw string expanded as if it were a value of this section.
+//
+// For text that is not in the document at all — a command-line
+// override, a template a program is filling — resolved against the
+// document's keys.
+//
+// ```novo
+// use iniinterp
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[p]\nroot = /srv\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             match iniinterp.expand(doc, "p", "%(root)s/log", IniInterpBasic)
+//                 Ok(v)  => println(v)
+//                 Err(_) => println("could not expand")
+// ```
+pub fn expand(doc: inidoc.IniDocument, section: Str, raw: Str,
+              style: IniInterpolation) -> Result<Str, inierror.IniFault> []
+    todo("ini-nv.iniinterp.expand")
+
+// Every value in the document, expanded in place.
+//
+// What a program wants once, at start-up, when it is going to read a
+// great many settings and will never write the file back.  The document
+// that comes out is NOT round-trippable — its references are gone — and
+// that is why this is a call and not what `parse` does.
+//
+// ```novo
+// use iniinterp
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[p]\nroot = /srv\ndata = %(root)s/d\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             match iniinterp.expand_document(doc, IniInterpBasic)
+//                 Ok(_)  => println("expanded")
+//                 Err(_) => println("could not expand")
+// ```
+pub fn expand_document(doc: inidoc.IniDocument,
+                       style: IniInterpolation) -> Result<inidoc.IniDocument, inierror.IniFault> []
+    todo("ini-nv.iniinterp.expand_document")
+
+// The references a raw value makes, in the order they appear.
+//
+// Without resolving any of them, so a caller can ask "what does this
+// file depend on?" before it has the values — which is what a tool
+// checking a configuration for dangling references does.
+//
+// ```novo
+// use std.list
+// use iniinterp
+//
+// fn main() [io]
+//     let refs = iniinterp.references("%(a)s/%(b)s", IniInterpBasic)
+//     println("${list.len(refs)}")
+// ```
+pub fn references(raw: Str, style: IniInterpolation) -> [IniReference] []
+    todo("ini-nv.iniinterp.references")
+
+// Whether a raw value holds any reference at all.
+//
+// The cheap check in front of the expensive call: a file of forty
+// literal values costs one scan each and no resolution.
+//
+// ```novo
+// use iniinterp
+//
+// fn main() [io]
+//     let has = iniinterp.has_references("plain", IniInterpBasic)
+//     println("${has}")
+// ```
+pub fn has_references(raw: Str, style: IniInterpolation) -> Bool []
+    todo("ini-nv.iniinterp.has_references")
+
+// Text escaped so that expansion answers it unchanged.
+//
+// `%` becomes `%%` under the basic style, `$` becomes `$$` under the
+// extended one, and nothing changes under `IniInterpNone`.  What a
+// program setting a value from user input must call, and the reason it
+// is public rather than internal to `set`: `inidoc.set` stores RAW
+// text, deliberately, so that a caller CAN write a reference.
+//
+// ```novo
+// use iniinterp
+//
+// fn main() [io]
+//     println(iniinterp.escape("100% done", IniInterpBasic))
+// ```
+pub fn escape(text: Str, style: IniInterpolation) -> Str []
+    todo("ini-nv.iniinterp.escape")
+
+// Every key whose value would fail to expand, with the fault each one
+// gets.
+//
+// The whole-document check a start-up path runs once: a dangling
+// reference in a setting nothing reads until Tuesday is a fault
+// somebody would rather have on Monday.  Empty for a document that
+// resolves.
+//
+// ```novo
+// use std.list
+// use iniinterp
+// use iniread
+//
+// fn main() [io]
+//     match iniread.read("[p]\na = %(nope)s\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) =>
+//             let bad = iniinterp.check(doc, IniInterpBasic)
+//             println("${list.len(bad)}")
+// ```
+pub fn check(doc: inidoc.IniDocument, style: IniInterpolation) -> [inierror.IniFault] []
+    todo("ini-nv.iniinterp.check")

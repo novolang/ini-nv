@@ -1,0 +1,115 @@
+// inierror.nv — the one fault type, and the line it happened on.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// A LINE AND A COLUMN, NOT A BYTE OFFSET, and the difference from
+// xml-nv is the format's rather than a preference.  INI is a LINE
+// format: every construct begins and ends on one line, a person edits
+// it in an editor that counts lines, and the message they want is
+// "line 14".  A byte offset would be the same information with a step
+// of arithmetic in front of it and nothing gained.
+//
+// THE REFUSALS ARE POLICY, WHICH IS WHY THERE ARE SO FEW.  INI has no
+// specification, so almost every line has a reading — the question is
+// which reading, and that is what `iniread.IniOptions` decides.  A
+// duplicate key is a fault only when the caller asked for it to be one.
+// What is left here is the small set of lines that have no reading at
+// all under any policy, plus the three ways interpolation can fail.
+
+// What was wrong, named.
+//
+// ```novo
+// use inierror
+//
+// fn main() [io]
+//     println(inierror.kind_name(IniMissingDelimiter))
+// ```
+pub enum IniFaultKind
+    // A key-value line with neither `=` nor `:` on it, and no earlier
+    // key for it to continue.
+    IniMissingDelimiter
+    // A section header that opened with `[` and never closed.
+    IniUnterminatedSection
+    // `[]` — a section whose name is empty.  configparser accepts it
+    // and rust-ini does not; this package refuses, because a section
+    // nothing can name is a section nothing can read.
+    IniEmptySectionName
+    // A delimiter with nothing before it.
+    IniEmptyKey
+    // A key-value line before any section header.  configparser's
+    // `MissingSectionHeaderError`; `IniOptions.implicit_section` is
+    // what turns it off.
+    IniKeyBeforeSection
+    // An indented continuation line with no key above it to continue.
+    IniContinuationWithoutKey
+    // The same key twice in one section, under a policy that refuses.
+    IniDuplicateKey
+    // The same section header twice, under a policy that refuses.
+    IniDuplicateSection
+    // `%(` with no closing `)s`, or `${` with no closing `}`.
+    IniBadInterpolationSyntax
+    // A reference to a key no section in scope has.
+    IniUnknownReference
+    // A chain of references that comes back to where it started, or
+    // that runs past `iniinterp.INTERPOLATION_DEPTH_LIMIT`.
+    IniInterpolationCycle
+    // A `${a:b:c}` — an extended reference with more than one colon,
+    // which names no section and no key.
+    IniBadReference
+
+// A fault: what, and which line.
+//
+// ```novo
+// use inierror
+//
+// fn main() [io]
+//     let f = inierror.fault(IniEmptyKey, 14, 1)
+//     println("${f.line}")
+// ```
+pub struct IniFault
+    kind: IniFaultKind
+    // 1-based, counted from the first line of the source.
+    line: Int
+    // 1-based, in bytes.  `1` when the whole line is the problem.
+    column: Int
+
+// A fault from its parts.
+//
+// ```novo
+// use inierror
+//
+// fn main() [io]
+//     println(inierror.kind_name(inierror.fault(IniDuplicateKey, 3, 1).kind))
+// ```
+pub fn fault(kind: IniFaultKind, line: Int, column: Int) -> IniFault []
+    todo("ini-nv.inierror.fault")
+
+// The kind's name, in the spelling a message uses.
+//
+// Lower case with hyphens — `"missing-delimiter"`,
+// `"interpolation-cycle"` — and stable across releases, because a
+// program's own error text and its test assertions quote them.
+//
+// ```novo
+// use inierror
+//
+// fn main() [io]
+//     println(inierror.kind_name(IniInterpolationCycle))
+// ```
+pub fn kind_name(kind: IniFaultKind) -> Str []
+    todo("ini-nv.inierror.kind_name")
+
+// One line about the fault, with the line number in it.
+//
+// It does NOT quote the source — this module never sees it — so a
+// message showing the offending line is built by the caller out of the
+// number and its own copy of the text.
+//
+// ```novo
+// use inierror
+//
+// fn main() [io]
+//     println(inierror.message(inierror.fault(IniKeyBeforeSection, 1, 1)))
+// ```
+pub fn message(f: IniFault) -> Str []
+    todo("ini-nv.inierror.message")

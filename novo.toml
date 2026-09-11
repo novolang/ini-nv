@@ -1,0 +1,52 @@
+[package]
+name        = "ini-nv"
+version     = "0.0.1"
+description = "The configparser and rust-ini dialects of INI, with the differences between them as a value the caller picks: sections, both delimiters, both comment characters, line continuations, four duplicate-key policies, configparser's two interpolation spellings as a step of their own, a writer that puts the comments and the order back, and one call that turns a document into a config-core-nv tree.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`: a line scan over text the caller already holds, a document of
+# strings, and a renderer that answers a string or appends to the
+# caller's buffer.  No function declares an effect — the file is
+# `config-nv`'s to open, and this package never learns where it came
+# from.
+layer       = "core"
+
+category    = "data"
+
+tags        = ["ini", "configparser", "rust-ini", "config", "cfg", "round-trip", "interpolation", "sans-io"]
+repository  = "https://github.com/novolang/ini-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Reading INI the way the tool that wrote it meant it"
+
+[dependencies]
+# The merge algebra's value tree, so that `src/inicfg.nv` can hand
+# `config-nv` a `ConfigValue` and that package's ini adapter is one
+# call rather than a second copy of the mapping rules.
+#
+# The direction is the affordable one.  `config-core-nv` is `core` and
+# has NO dependencies of its own, so a consumer who only wanted to read
+# an INI file pays for one package of pure arithmetic.  The reverse —
+# `config-core-nv` carrying the adapter — is what its own manifest
+# refuses, because that would put a parser in the closure of a package
+# whose subject is precedence.
+#
+# Under the caret rule a `0.0.x` version has no compatible neighbours:
+# `^0.0.1` means exactly 0.0.1, and a republished config-core-nv needs
+# this line edited.  It is ITSELF an interface today — every body a
+# `todo()` — so a program assembling this closure builds and panics on
+# the first call, which is the interfaces-first milestone working as
+# designed.
+config-core-nv = "^0.0.1"

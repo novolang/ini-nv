@@ -1,0 +1,255 @@
+// iniread_tests.nv — the API suite for the reader, the dialects and
+// the document.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: ini-nv.<module>.<fn>`.
+//
+// THE CASES ARE configparser's OWN DOCUMENTED EXAMPLES.  The Python
+// standard library's `configparser` page opens with an `ssh_config`-
+// shaped file and then walks through `[DEFAULT]`, `allow_no_value`,
+// the two delimiters and the duplicate rules; those are the documents
+// below, because they are the ones a reader coming from Python will
+// try first and the ones whose expected answers are already written
+// down somewhere a reviewer can check.
+//
+// THE DIALECT CASES ARE WHERE THE TWO REFERENCES DISAGREE, which is
+// the other half of what this package has to get right: `a = b ;c` is
+// a value of `b ;c` to configparser and `b` to rust-ini, and a package
+// that answered one of those always would be wrong about half the
+// files it met.
+
+use std.test
+use std.list
+use inidoc
+use iniread
+use inierror
+
+// configparser's own opening example, reduced to the keys these tests
+// ask about.
+fn ssh_config() -> Str
+    let defaults = "[DEFAULT]\nServerAliveInterval = 45\nCompression = yes\n"
+    let forge = "[forge.example]\nUser = hg\n"
+    let secret = "[topsecret.server.example]\nPort = 50022\nCompression = no\n"
+    "${defaults}${forge}${secret}"
+
+// The document, or a failed assertion.  Every test below starts here.
+fn parsed(text: Str, options: iniread.IniOptions) -> inidoc.IniDocument [io]
+    match iniread.parse(text, options)
+        Ok(doc) => doc
+        Err(_)  =>
+            test.assert(false)
+            inidoc.empty()
+
+@test
+fn test_the_opening_example_reads_the_way_the_page_says() [io]
+    let doc = parsed(ssh_config(), iniread.defaults())
+
+    test.case("three sections, in the order they were written")
+    test.assert(list.len(inidoc.section_names(doc)) == 3)
+    test.assert(list.get(inidoc.section_names(doc), 0) == "DEFAULT")
+
+    test.case("a key a section declares")
+    test.assert(inidoc.get(doc, "forge.example", "User") == Some("hg"))
+
+    test.case("a key only the fallback declares reaches every section")
+    test.assert(inidoc.get(doc, "forge.example", "ServerAliveInterval") == Some("45"))
+
+    test.case("and get_local is how a caller finds out it was a fallback")
+    test.assert(inidoc.get_local(doc, "forge.example", "ServerAliveInterval") == None)
+
+    test.case("a section that declares it shadows the fallback")
+    test.assert(inidoc.get(doc, "topsecret.server.example", "Compression") == Some("no"))
+    test.assert(inidoc.get(doc, "forge.example", "Compression") == Some("yes"))
+
+    test.case("keys lists what a lookup would find; local_keys what was written")
+    test.assert(list.len(inidoc.keys(doc, "forge.example")) == 3)
+    test.assert(list.len(inidoc.local_keys(doc, "forge.example")) == 1)
+
+    test.case("a section name with dots is one name and not a path")
+    test.assert(inidoc.has_section(doc, "forge.example"))
+    test.assert(inidoc.has_section(doc, "forge") == false)
+
+@test
+fn test_both_delimiters_and_both_comment_characters() [io]
+    test.case("a colon is a delimiter, which is configparser's default")
+    let colon = parsed("[p]\nhome: /Users\n", iniread.defaults())
+    test.assert(inidoc.get(colon, "p", "home") == Some("/Users"))
+
+    test.case("and the entry remembers which one it was written with")
+    match inidoc.entry(colon, "p", "home")
+        None    => test.assert(false)
+        Some(e) => test.assert(e.delimiter == 58)
+
+    test.case("# and ; both start a whole-line comment")
+    let commented = parsed("[p]\n# one\n; two\na = 1\n", iniread.defaults())
+    match inidoc.entry(commented, "p", "a")
+        None    => test.assert(false)
+        Some(e) => test.assert(list.len(e.comments_above) == 2)
+
+    test.case("an inline comment is OFF by default — configparser keeps the text")
+    let inline = parsed("[p]\nurl = http://x/#frag\n", iniread.defaults())
+    test.assert(inidoc.get(inline, "p", "url") == Some("http://x/#frag"))
+
+    test.case("and rust_ini() strips a ; — which is the disagreement itself")
+    let stripped = parsed("[p]\na = b ;c\n", iniread.rust_ini())
+    test.assert(inidoc.get(stripped, "p", "a") == Some("b"))
+    let kept = parsed("[p]\na = b ;c\n", iniread.defaults())
+    test.assert(inidoc.get(kept, "p", "a") == Some("b ;c"))
+
+@test
+fn test_a_value_can_be_continued_on_the_next_line() [io]
+    test.case("an indented line joins the value above it")
+    let doc = parsed("[p]\nhosts = alpha\n    beta\n    gamma\n", iniread.defaults())
+    test.assert(inidoc.get(doc, "p", "hosts") == Some("alpha\nbeta\ngamma"))
+
+    test.case("an indented line with no key above it is a fault")
+    match iniread.parse("[p]\n    orphan\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniContinuationWithoutKey)
+
+    test.case("with continuations off, the same line has no reading")
+    var plain = iniread.defaults()
+    plain.continuations = false
+    match iniread.parse("[p]\na = 1\n    beta\n", plain)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniMissingDelimiter)
+
+@test
+fn test_the_four_duplicate_policies_each_answer_differently() [io]
+    let text = "[p]\na = 1\na = 2\n"
+
+    test.case("refuse — configparser's strict=True, and the default here")
+    match iniread.parse(text, iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniDuplicateKey)
+
+    test.case("first wins")
+    var first = iniread.defaults()
+    first.duplicate_keys = IniDupFirstWins
+    test.assert(inidoc.get(parsed(text, first), "p", "a") == Some("1"))
+
+    test.case("last wins — configparser's strict=False")
+    var last = iniread.defaults()
+    last.duplicate_keys = IniDupLastWins
+    test.assert(inidoc.get(parsed(text, last), "p", "a") == Some("2"))
+
+    test.case("keep all — rust-ini's get_all, and a systemd unit's After=")
+    var all = iniread.defaults()
+    all.duplicate_keys = IniDupKeepAll
+    let kept = parsed(text, all)
+    test.assert(list.len(inidoc.get_all(kept, "p", "a")) == 2)
+    test.assert(inidoc.get(kept, "p", "a") == Some("1"))
+
+    test.case("a repeated section header refuses under the default policy")
+    match iniread.parse("[p]\na = 1\n[p]\nb = 2\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniDuplicateSection)
+
+    test.case("and merges into the open one under last-wins")
+    var merge = iniread.defaults()
+    merge.duplicate_sections = IniDupLastWins
+    let merged = parsed("[p]\na = 1\n[p]\nb = 2\n", merge)
+    test.assert(list.len(inidoc.section_names(merged)) == 1)
+    test.assert(inidoc.get(merged, "p", "b") == Some("2"))
+
+@test
+fn test_the_lines_that_have_no_reading_under_any_policy() [io]
+    test.case("a key before the first section header")
+    match iniread.parse("stray = 1\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniKeyBeforeSection)
+
+    test.case("unless the dialect names a section to put it in")
+    var implicit = iniread.defaults()
+    implicit.implicit_section = "root"
+    test.assert(inidoc.get(parsed("stray = 1\n", implicit), "root", "stray") == Some("1"))
+
+    test.case("a section header that never closed")
+    match iniread.parse("[p\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniUnterminatedSection)
+
+    test.case("a section with no name")
+    match iniread.parse("[]\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniEmptySectionName)
+
+    test.case("a delimiter with nothing before it")
+    match iniread.parse("[p]\n = 1\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniEmptyKey)
+
+    test.case("a bare key needs allow_no_value, which configparser also demands")
+    match iniread.parse("[p]\nflag\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniMissingDelimiter)
+    var bare = iniread.defaults()
+    bare.allow_no_value = true
+    test.assert(inidoc.get(parsed("[p]\nflag\n", bare), "p", "flag") == Some(""))
+
+@test
+fn test_the_three_dialects_differ_where_the_page_says_they_do() [io]
+    test.case("configparser lowercases option names and this package does not")
+    test.assert(iniread.configparser().lowercase_keys)
+    test.assert(iniread.defaults().lowercase_keys == false)
+    let cp = parsed("[p]\nUser = hg\n", iniread.configparser())
+    test.assert(inidoc.get(cp, "p", "user") == Some("hg"))
+    let kept = parsed("[p]\nUser = hg\n", iniread.defaults())
+    test.assert(inidoc.get(kept, "p", "User") == Some("hg"))
+
+    test.case("rust-ini has no fallback section at all")
+    test.assert(iniread.rust_ini().default_section == "")
+    test.assert(iniread.defaults().default_section == inidoc.DEFAULT_SECTION)
+
+    test.case("a section name is case-sensitive in all three")
+    let doc = parsed("[Web]\na = 1\n", iniread.defaults())
+    test.assert(inidoc.has_section(doc, "Web"))
+    test.assert(inidoc.has_section(doc, "web") == false)
+
+@test
+fn test_one_line_can_be_classified_without_a_document() [io]
+    test.case("a section header")
+    match iniread.classify("[web]", iniread.defaults())
+        IniSectionLine(name, _) => test.assert(name == "web")
+        _                       => test.assert(false)
+
+    test.case("a key and a value")
+    match iniread.classify("port = 8080", iniread.defaults())
+        IniEntryLine(key, value, _, _) =>
+            test.assert(key == "port")
+            test.assert(value == "8080")
+        _                              =>
+            test.assert(false)
+
+    test.case("a comment, without its prefix")
+    match iniread.classify("# why", iniread.defaults())
+        IniCommentLine(text) => test.assert(text == " why")
+        _                    => test.assert(false)
+
+    test.case("and a blank one")
+    match iniread.classify("   ", iniread.defaults())
+        IniBlankLine => test.assert(true)
+        _            => test.assert(false)
+
+    test.case("what may be written as a name, and what may not")
+    test.assert(iniread.is_section_name("web", iniread.defaults()))
+    test.assert(iniread.is_section_name("a]b", iniread.defaults()) == false)
+    test.assert(iniread.is_key("port", iniread.defaults()))
+    test.assert(iniread.is_key("a=b", iniread.defaults()) == false)
+
+@test
+fn test_the_fault_vocabulary_is_stable() [io]
+    test.case("a kind has a name a message and a test can quote")
+    test.assert(inierror.kind_name(IniMissingDelimiter) == "missing-delimiter")
+    test.assert(inierror.kind_name(IniInterpolationCycle) == "interpolation-cycle")
+
+    test.case("a fault carries the line, because INI is a line format")
+    let f = inierror.fault(IniEmptyKey, 14, 3)
+    test.assert(f.line == 14)
+    test.assert(f.column == 3)
+    test.assert(inierror.message(f) != "")
+
+    test.case("the parser reports the line the bad line was on")
+    match iniread.parse("[p]\na = 1\n[]\n", iniread.defaults())
+        Ok(_)  => test.assert(false)
+        Err(g) => test.assert(g.line == 3)

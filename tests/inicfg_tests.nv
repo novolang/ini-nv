@@ -1,0 +1,338 @@
+// inicfg_tests.nv — the API suite for interpolation, the round-trip
+// writer, and the conversion `config-nv` makes one call to.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: ini-nv.<module>.<fn>`.
+//
+// THE INTERPOLATION CASES ARE configparser's OWN, from the two
+// examples its page gives for `BasicInterpolation` and
+// `ExtendedInterpolation` — the `[Paths]` document with `home_dir` and
+// the `[Common]` / `[Frameworks]` pair.  Both are chains rather than
+// single substitutions, which is the part an implementation gets wrong.
+//
+// THE ROUND-TRIP CASE IS THE PACKAGE'S LOAD-BEARING CLAIM: read a file
+// with comments, blank lines, both delimiters and both comment
+// characters in it, write it back, and get the same bytes.  A tool that
+// changes one value has to hand a person a one-line diff, and that is
+// the assertion that keeps it true.
+
+use std.test
+use std.list
+use cfgvalue
+use inidoc
+use iniread
+use iniinterp
+use iniwrite
+use inicfg
+
+// configparser's BasicInterpolation example, whole.
+fn paths() -> Str
+    let head = "[Paths]\nhome_dir: /Users\nmy_dir: %(home_dir)s/lumberjack\n"
+    "${head}my_pictures: %(my_dir)s/Pictures\n"
+
+// configparser's ExtendedInterpolation example, reduced to the two
+// keys the assertions name.
+fn frameworks() -> Str
+    let common = "[Common]\nsystem_dir: /System\n"
+    let frame = "[Frameworks]\npath: \${Common:system_dir}/Library/Frameworks/\n"
+    "${common}${frame}"
+
+fn parsed(text: Str) -> inidoc.IniDocument [io]
+    match iniread.read(text)
+        Ok(doc) => doc
+        Err(_)  =>
+            test.assert(false)
+            inidoc.empty()
+
+@test
+fn test_basic_interpolation_follows_a_chain() [io]
+    let doc = parsed(paths())
+
+    test.case("the raw value still holds the reference — that is the point")
+    test.assert(inidoc.get(doc, "Paths", "my_dir") == Some("%(home_dir)s/lumberjack"))
+
+    test.case("one substitution")
+    match iniinterp.value(doc, "Paths", "my_dir", IniInterpBasic)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == Some("/Users/lumberjack"))
+
+    test.case("and a chain, which is the half an implementation gets wrong")
+    match iniinterp.value(doc, "Paths", "my_pictures", IniInterpBasic)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == Some("/Users/lumberjack/Pictures"))
+
+    test.case("a percent doubled is a literal percent")
+    let pct = parsed("[p]\na = 100%% done\n")
+    match iniinterp.value(pct, "p", "a", IniInterpBasic)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == Some("100% done"))
+
+    test.case("and escape is how a caller writes one")
+    test.assert(iniinterp.escape("100% done", IniInterpBasic) == "100%% done")
+    test.assert(iniinterp.escape("100% done", IniInterpNone) == "100% done")
+
+@test
+fn test_extended_interpolation_can_name_another_section() [io]
+    let doc = parsed(frameworks())
+
+    test.case("a cross-section reference")
+    match iniinterp.value(doc, "Frameworks", "path", IniInterpExtended)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == Some("/System/Library/Frameworks/"))
+
+    test.case("and one without a colon means this section")
+    let local = parsed("[p]\na: 1\nb: \${a}/2\n")
+    match iniinterp.value(local, "p", "b", IniInterpExtended)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == Some("1/2"))
+
+    test.case("a dollar doubled is a literal dollar")
+    test.assert(iniinterp.escape("\$PATH", IniInterpExtended) == "\$\$PATH")
+
+    test.case("more than one colon names neither a section nor a key")
+    let bad = parsed("[p]\na: \${x:y:z}\n")
+    match iniinterp.value(bad, "p", "a", IniInterpExtended)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniBadReference)
+
+@test
+fn test_the_three_ways_interpolation_fails() [io]
+    test.case("a reference to a key nothing has")
+    let dangling = parsed("[p]\na = %(nope)s\n")
+    match iniinterp.value(dangling, "p", "a", IniInterpBasic)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniUnknownReference)
+
+    test.case("which is a different answer from a key that is absent")
+    match iniinterp.value(dangling, "p", "missing", IniInterpBasic)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == None)
+
+    test.case("a reference that never closes")
+    let unclosed = parsed("[p]\na = %(nope\n")
+    match iniinterp.value(unclosed, "p", "a", IniInterpBasic)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniBadInterpolationSyntax)
+
+    test.case("a cycle, named as one rather than as a depth limit")
+    let cycled = parsed("[p]\na = %(b)s\nb = %(a)s\n")
+    match iniinterp.value(cycled, "p", "a", IniInterpBasic)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniInterpolationCycle)
+
+    test.case("check finds every one of them in one pass")
+    test.assert(list.len(iniinterp.check(dangling, IniInterpBasic)) == 1)
+    test.assert(list.len(iniinterp.check(parsed(paths()), IniInterpBasic)) == 0)
+
+@test
+fn test_interpolation_is_a_step_and_not_something_a_read_does() [io]
+    let doc = parsed(paths())
+
+    test.case("the references a value makes can be asked for without resolving")
+    let refs = iniinterp.references("%(a)s/%(b)s", IniInterpBasic)
+    test.assert(list.len(refs) == 2)
+    test.assert(list.get(refs, 1).key == "b")
+    test.assert(list.get(refs, 0).section == "")
+
+    test.case("the cheap check in front of the expensive call")
+    test.assert(iniinterp.has_references("%(a)s", IniInterpBasic))
+    test.assert(iniinterp.has_references("plain", IniInterpBasic) == false)
+    test.assert(iniinterp.has_references("%(a)s", IniInterpNone) == false)
+
+    test.case("expand takes text that is not in the document at all")
+    match iniinterp.expand(doc, "Paths", "%(home_dir)s/log", IniInterpBasic)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(v == "/Users/log")
+
+    test.case("expand_document resolves everything and gives up the round trip")
+    match iniinterp.expand_document(doc, IniInterpBasic)
+        Err(_)   => test.assert(false)
+        Ok(flat) => test.assert(inidoc.get(flat, "Paths", "my_dir") == Some("/Users/lumberjack"))
+
+    test.case("a style has a name a message can quote")
+    test.assert(iniinterp.style_name(IniInterpBasic) == "basic")
+    test.assert(iniinterp.style_name(IniInterpExtended) == "extended")
+    test.assert(iniinterp.style_name(IniInterpNone) == "none")
+
+@test
+fn test_reading_then_writing_is_the_identity() [io]
+    test.case("comments, blank lines, both delimiters and both prefixes survive")
+    let head = "# a file somebody wrote\n\n[web]\n; the port\nport = 8080\n"
+    let text = "${head}host: localhost  # inline, kept\n\n[db]\nurl = x\n"
+    let doc = parsed(text)
+    test.assert(iniwrite.round_trip(doc) == text)
+
+    test.case("a value changed leaves everything around it alone")
+    let changed = inidoc.set(doc, "web", "port", "9090")
+    let want = "${head}host: localhost  # inline, kept\n\n[db]\nurl = x\n"
+    test.assert(iniwrite.round_trip(changed) != want)
+    match inidoc.entry(changed, "web", "port")
+        None    => test.assert(false)
+        Some(e) => test.assert(list.len(e.comments_above) == 1)
+
+    test.case("render imposes a style where the document has no opinion")
+    let tight = parsed("[p]\na=1\n")
+    test.assert(iniwrite.render(tight, iniwrite.standard()) == "[p]\na = 1\n")
+    test.assert(iniwrite.render(tight, iniwrite.compact()) == "[p]\na=1\n")
+
+    test.case("windows() differs from standard() only in the endings")
+    test.assert(iniwrite.windows().newline == "\r\n")
+    test.assert(iniwrite.standard().newline == "\n")
+
+    test.case("render_into appends to the caller's buffer")
+    let out = iniwrite.render_into([], tight, iniwrite.compact())
+    test.assert(list.len(out) == iniwrite.rendered_len(tight, iniwrite.compact()))
+
+    test.case("one section on its own, for a caller assembling a file")
+    match inidoc.section(tight, "p")
+        None    => test.assert(false)
+        Some(s) => test.assert(iniwrite.render_section(s, iniwrite.compact()) == "[p]\na=1\n")
+
+    test.case("a document built in memory that has no spelling is refused")
+    let impossible = inidoc.set(inidoc.empty(), "a]b", "k", "v")
+    match iniwrite.check(impossible, iniread.defaults())
+        None    => test.assert(false)
+        Some(f) => test.assert(f.kind == IniUnterminatedSection)
+
+@test
+fn test_editing_keeps_what_was_not_edited() [io]
+    let doc = parsed("[web]\n# why 45\ntimeout = 45\nport = 80\n")
+
+    test.case("a new key is appended to its section")
+    let added = inidoc.set(doc, "web", "host", "localhost")
+    test.assert(list.len(inidoc.local_keys(added, "web")) == 3)
+    test.assert(list.get(inidoc.local_keys(added, "web"), 2) == "host")
+
+    test.case("a key can be written with the comment that explains it")
+    let documented = inidoc.set_with_comment(doc, "web", "retries", "3", ["how many"])
+    match inidoc.entry(documented, "web", "retries")
+        None    => test.assert(false)
+        Some(e) => test.assert(list.get(e.comments_above, 0) == "how many")
+
+    test.case("removing a key takes the comment that was about it")
+    let removed = inidoc.remove(doc, "web", "timeout")
+    test.assert(inidoc.has_key(removed, "web", "timeout") == false)
+    test.assert(iniwrite.round_trip(removed) == "[web]\nport = 80\n")
+
+    test.case("sections can be added, renamed and removed")
+    let renamed = inidoc.rename_section(doc, "web", "http")
+    test.assert(inidoc.get(renamed, "http", "port") == Some("80"))
+    test.assert(inidoc.has_section(inidoc.remove_section(doc, "web"), "web") == false)
+    test.assert(list.len(inidoc.add_section(doc, "db").sections) == 2)
+
+    test.case("overlay is two files of one format, not a layered merge")
+    let over = parsed("[web]\nport = 8080\n")
+    test.assert(inidoc.get(inidoc.overlay(doc, over), "web", "port") == Some("8080"))
+    test.assert(inidoc.get(inidoc.overlay(doc, over), "web", "timeout") == Some("45"))
+
+    test.case("a missing key has a fault that points at the section")
+    test.assert(inidoc.missing_key_fault(doc, "web", "nope").line > 0)
+
+    test.case("a document can be told to treat no section as a fallback")
+    test.assert(inidoc.empty_with("").default_section == "")
+    test.assert(inidoc.empty().default_section == inidoc.DEFAULT_SECTION)
+
+@test
+fn test_the_conversion_config_nv_makes_one_call_to() [io]
+    let doc = parsed("[DEFAULT]\nt = 45\n[web]\nport = 8080\nname = alpha\n")
+
+    test.case("the tree is a table of sections, each a table of keys")
+    match inicfg.to_config(doc, IniInterpNone, IniDefaultsAsSection)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            test.assert(cfgvalue.kind_of(v) == KindTable)
+            match cfgvalue.field(v, "web")
+                None    => test.assert(false)
+                Some(w) => test.assert(cfgvalue.len_of(w) == 2)
+
+    test.case("every value is a string, because INI has no types")
+    match inicfg.to_config(doc, IniInterpNone, IniDefaultsAsSection)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            match cfgvalue.field(v, "web")
+                None    => test.assert(false)
+                Some(w) =>
+                    match cfgvalue.field(w, "port")
+                        None    => test.assert(false)
+                        Some(p) => test.assert(cfgvalue.kind_of(p) == KindStr)
+
+    test.case("unless the caller asks for config-core-nv's own inference")
+    match inicfg.to_config_typed(doc, IniInterpNone, IniDefaultsAsSection)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            match cfgvalue.field(v, "web")
+                None    => test.assert(false)
+                Some(w) =>
+                    match cfgvalue.field(w, "port")
+                        None    => test.assert(false)
+                        Some(p) => test.assert(cfgvalue.kind_of(p) == KindInt)
+
+    test.case("the fallback is a section of its own, never copied into the others")
+    match inicfg.to_config(doc, IniInterpNone, IniDefaultsAsSection)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            test.assert(cfgvalue.field(v, "DEFAULT") != None)
+            match cfgvalue.field(v, "web")
+                None    => test.assert(false)
+                Some(w) => test.assert(cfgvalue.field(w, "t") == None)
+
+    test.case("and the other two policies are there for a caller not layering")
+    match inicfg.to_config(doc, IniInterpNone, IniDefaultsFlattened)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            test.assert(cfgvalue.field(v, "DEFAULT") == None)
+            match cfgvalue.field(v, "web")
+                None    => test.assert(false)
+                Some(w) => test.assert(cfgvalue.field(w, "t") != None)
+    match inicfg.to_config(doc, IniInterpNone, IniDefaultsDropped)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(cfgvalue.field(v, "DEFAULT") == None)
+
+    test.case("a policy has a name a message can quote")
+    test.assert(inicfg.defaults_name(IniDefaultsAsSection) == "as-section")
+
+@test
+fn test_the_conversion_s_named_edges() [io]
+    test.case("a section name with dots is one key and not a path")
+    let dotted = parsed("[a.b]\nk = 1\n")
+    match inicfg.to_config(dotted, IniInterpNone, IniDefaultsAsSection)
+        Err(_) => test.assert(false)
+        Ok(v)  =>
+            test.assert(cfgvalue.field(v, "a.b") != None)
+            test.assert(cfgvalue.field(v, "a") == None)
+
+    test.case("a key kept several times becomes a list, which INI really has")
+    var all = iniread.defaults()
+    all.duplicate_keys = IniDupKeepAll
+    match iniread.parse("[u]\nAfter = a\nAfter = b\n", all)
+        Err(_)   =>
+            test.assert(false)
+        Ok(unit) =>
+            match inicfg.to_config(unit, IniInterpNone, IniDefaultsAsSection)
+                Err(_) => test.assert(false)
+                Ok(v)  =>
+                    match cfgvalue.field(v, "u")
+                        None    => test.assert(false)
+                        Some(u) =>
+                            match cfgvalue.field(u, "After")
+                                None    => test.assert(false)
+                                Some(a) => test.assert(cfgvalue.kind_of(a) == KindList)
+
+    test.case("interpolation can fail on the way into the tree, and says so")
+    let dangling = parsed("[p]\na = %(nope)s\n")
+    match inicfg.to_config(dangling, IniInterpBasic, IniDefaultsAsSection)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(f.kind == IniUnknownReference)
+
+    test.case("one section alone, for a file whose rest belongs to somebody else")
+    let shared = parsed("[mine]\na = 1\n[theirs]\nb = 2\n")
+    match inicfg.section_to_config(shared, "mine", IniInterpNone)
+        Err(_) => test.assert(false)
+        Ok(v)  => test.assert(cfgvalue.len_of(v) == 1)
+
+    test.case("a tree deeper than two levels has no INI spelling")
+    test.assert(inicfg.is_writable(cfgvalue.empty_table()))
+    test.assert(inicfg.CONFIG_DEPTH == 2)
+    match inicfg.from_config(cfgvalue.empty_table())
+        Err(_)  => test.assert(false)
+        Ok(doc) => test.assert(list.len(doc.sections) == 0)

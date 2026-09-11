@@ -1,0 +1,216 @@
+// iniwrite.nv — a document back out as text, with the comments and the
+// order still in it.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// NOTHING HERE WRITES.  Every function answers a `Str` or appends to a
+// buffer the caller owns; nothing opens a file and nothing prints.
+// `docs/publishing.md` § Design is explicit that a library returns the
+// text or takes the writer, and this package has no effects with which
+// to do otherwise even if it wanted to.
+//
+// THERE IS ONE WRITER AND NOT TWO, which is where this differs from
+// toml-nv.  That package has a canonical writer and an editing one,
+// because a `TomlValue` genuinely cannot carry a comment.  An
+// `IniDocument` carries all of it — every comment, every blank-line
+// grouping, each entry's own delimiter — so `round_trip` is the
+// identity on a file nobody changed, and `render` with a style is the
+// same walk with the style's answers substituted where the document has
+// no opinion.  A caller does not have to choose a writer; it chooses
+// whether it is imposing a style.
+//
+// WHAT A STYLE CANNOT CHOOSE.  There is no key ordering, because a
+// section's order IS the file's order and sorting it would make
+// `parse` then `render` stop being the identity.  There is no quoting
+// option, because INI has no quoting: a value is the text between the
+// delimiter and the end of the line, and a value with a leading space
+// that mattered is a value this format cannot hold.  And there is no
+// escaping, for the same reason — `iniinterp.escape` handles the one
+// character that has a meaning, and nothing else does.
+
+use inidoc
+use inierror
+use iniread
+
+// How a rendered document is spelled, where the document has no
+// opinion of its own.
+pub struct IniStyle
+    // The delimiter to write for an entry that does not carry one —
+    // one a caller added with `inidoc.set`.  `61` for `=`, `58` for
+    // `:`.  An entry read from a file keeps its own.
+    delimiter: Int
+    // Write ` = ` rather than `=`.  True in almost every file in the
+    // wild.
+    spaces_around_delimiter: Bool
+    // The character to write a comment with: `35` for `#`, `59` for
+    // `;`.  Comments read from a file keep their own prefix.
+    comment_prefix: Int
+    // A blank line before every section header but the first.  True by
+    // default: it is the one piece of whitespace that is structural
+    // rather than decorative, because without it a header reads as
+    // belonging to the keys above it.
+    blank_before_section: Bool
+    // Write a `[DEFAULT]` section first, wherever it sits in the
+    // document.  True by default, because a fallback section that
+    // appears after the sections it is a fallback FOR reads as though
+    // it applies to nothing.
+    default_section_first: Bool
+    // Line ending: `"\n"` or `"\r\n"`.  Carried because an INI file is
+    // very often a Windows file, and a tool that rewrote one with unix
+    // endings would produce a diff on every line.
+    newline: Str
+
+// What most files in the wild look like: ` = `, `#` comments, a blank
+// line before each section, unix endings.
+//
+// ```novo
+// use iniwrite
+//
+// fn main() [io]
+//     println("${iniwrite.standard().spaces_around_delimiter}")
+// ```
+pub fn standard() -> IniStyle []
+    todo("ini-nv.iniwrite.standard")
+
+// No spaces around the delimiter, no blank lines between sections.
+//
+// For a file a machine reads and nobody edits, and for a test asserting
+// on bytes.
+//
+// ```novo
+// use iniwrite
+//
+// fn main() [io]
+//     println("${iniwrite.compact().blank_before_section}")
+// ```
+pub fn compact() -> IniStyle []
+    todo("ini-nv.iniwrite.compact")
+
+// `standard()` with `\r\n` endings.
+//
+// ```novo
+// use iniwrite
+//
+// fn main() [io]
+//     println("${iniwrite.windows().default_section_first}")
+// ```
+pub fn windows() -> IniStyle []
+    todo("ini-nv.iniwrite.windows")
+
+// The document back out, byte for byte as it was read.
+//
+// **The load-bearing claim of the writing half**: `iniread.parse` then
+// this is the identity on a well-formed file, so a tool that changed
+// one value hands a person a one-line diff.  It is a claim the test
+// suite checks against a file with comments, blank lines, both
+// delimiters and both comment characters in it.
+//
+// A document a caller BUILT rather than read has nothing to reproduce,
+// so entries with no recorded spelling are written in `standard()`.
+//
+// ```novo
+// use iniread
+// use iniwrite
+//
+// fn main() [io]
+//     match iniread.read("[web]\nport = 8080\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) => println(iniwrite.round_trip(doc))
+// ```
+pub fn round_trip(doc: inidoc.IniDocument) -> Str []
+    todo("ini-nv.iniwrite.round_trip")
+
+// The document rendered in a style, overriding what it remembers.
+//
+// What a formatter does: one spelling for the whole file, whatever it
+// arrived as.  The comments and the order still survive — a style
+// decides spelling, never content.
+//
+// ```novo
+// use iniread
+// use iniwrite
+//
+// fn main() [io]
+//     match iniread.read("[web]\nport=8080\n")
+//         Err(_)  => println("did not parse")
+//         Ok(doc) => println(iniwrite.render(doc, iniwrite.standard()))
+// ```
+pub fn render(doc: inidoc.IniDocument, style: IniStyle) -> Str []
+    todo("ini-nv.iniwrite.render")
+
+// The document rendered into a buffer the caller owns.
+//
+// For a program writing many files, or one large one, that would
+// rather not allocate a string per document.
+//
+// ```novo
+// use std.list
+// use inidoc
+// use iniwrite
+//
+// fn main() [io]
+//     let out = iniwrite.render_into([], inidoc.empty(), iniwrite.standard())
+//     println("${list.len(out)}")
+// ```
+pub fn render_into(out: [u8], doc: inidoc.IniDocument, style: IniStyle) -> [u8] []
+    todo("ini-nv.iniwrite.render_into")
+
+// One section rendered on its own.
+//
+// For a caller assembling a file out of pieces, or writing a single
+// section to somewhere that is not a file.
+//
+// ```novo
+// use inidoc
+// use iniwrite
+//
+// fn main() [io]
+//     match inidoc.section(inidoc.empty(), "web")
+//         Some(s) => println(iniwrite.render_section(s, iniwrite.standard()))
+//         None    => println("no such section")
+// ```
+pub fn render_section(section: inidoc.IniSection, style: IniStyle) -> Str []
+    todo("ini-nv.iniwrite.render_section")
+
+// Check that a document can be written under a dialect and answer the
+// first thing that cannot.
+//
+// A section name holding `]`, a key holding a delimiter, a value
+// holding a newline where continuations are off: each is a document a
+// caller built in memory that has no spelling in the format.  `None`
+// when it renders.
+//
+// Separate from `render` because the answer is almost always `None` and
+// a `Result` on the ordinary path would put a match in front of every
+// write.  A caller that built a document from user input calls this
+// first.
+//
+// ```novo
+// use inidoc
+// use iniread
+// use iniwrite
+//
+// fn main() [io]
+//     match iniwrite.check(inidoc.empty(), iniread.defaults())
+//         Some(f) => println("${f.line}")
+//         None    => println("it renders")
+// ```
+pub fn check(doc: inidoc.IniDocument, options: iniread.IniOptions) -> ?inierror.IniFault []
+    todo("ini-nv.iniwrite.check")
+
+// How many bytes rendering this document will produce.
+//
+// For a caller sizing a buffer before it starts.  Exact rather than an
+// estimate, because the walk is the same one `render` makes without the
+// appends.
+//
+// ```novo
+// use inidoc
+// use iniwrite
+//
+// fn main() [io]
+//     let n = iniwrite.rendered_len(inidoc.empty(), iniwrite.standard())
+//     println("${n}")
+// ```
+pub fn rendered_len(doc: inidoc.IniDocument, style: IniStyle) -> Int []
+    todo("ini-nv.iniwrite.rendered_len")
