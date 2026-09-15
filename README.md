@@ -1,230 +1,287 @@
 # ini-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
+An INI file is a text file of `key = value` lines grouped under
+`[section]` headers. There is no specification for it. What a file means
+is what the program that wrote it meant, so this package reads it under
+a **dialect** the caller names, and ships the dialects of Python's
+[configparser](https://docs.python.org/3/library/configparser.html) and
+Rust's [rust-ini](https://docs.rs/rust-ini). It also writes a file back
+with its comments and its order intact, and converts a document into
+[config-core-nv](https://novo-lang.org/packages/config-core-nv)'s value
+tree.
 
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`.  Installing this package works;
-calling it panics with `not implemented`.
+**Status: NOT IMPLEMENTED — interface only.** Every function is
+declared with its full signature, but every body is a `todo()` that
+panics when called. The package is published so its design can be
+reviewed and depended on before it is implemented. Version 0.1.0 will
+be the first working release.
 
-## What this is
+## What it is
 
-INI, read the way the tool that wrote it meant it.
+A **section** is a `[name]` header and the lines under it. An **entry**
+is a key, a delimiter and a value. A **fallback section**, written
+`[DEFAULT]` by configparser, supplies a value to every section that
+does not have one of its own.
 
-There is no INI specification, and that is the whole design problem.
-`a = b ;c` is a value of `b ;c` to Python's `configparser` and a value
-of `b` to Rust's `rust-ini`.  `[p]` twice is an error, a merge, or a
-second section depending on whom you ask.  `User` is a key called
-`user` to configparser and `User` to everyone else.  A package that
-picked one set of answers would be right about a third of the files it
-met.
+The implementations disagree about what a line means, and each
+disagreement is a field of the dialect.
 
-So the dialect is a **value the caller picks**, and three named
-constructors are the three answers somebody already depends on:
-`iniread.defaults()`, `iniread.configparser()`, `iniread.rust_ini()`.
-A caller reading a file written by a particular tool names that tool and
-gets that tool's reading.
-
-Six modules.
-
-| surface | module | reach for it when |
+| Line | One reading | The other |
 | --- | --- | --- |
-| the **dialect and the read** | `iniread` | you are turning text into a document |
-| the **document** | `inidoc` | you are reading settings, or changing them |
-| the **expansion** | `iniinterp` | the file uses `%(name)s` or `${section:name}` |
-| the **writer** | `iniwrite` | you are writing the file back out |
-| the **config tree** | `inicfg` | you are layering this file with others |
-| the **faults** | `inierror` | you are reporting what was wrong with somebody's file |
+| `a = b ;c` | The value is `b ;c` (configparser) | The value is `b` (rust-ini) |
+| `a: b` | An entry (configparser) | A syntax error (many C parsers) |
+| `[p]` twice | Refused, merged, or a second section | depending on the dialect |
+| `User = x` | The key is `user` (configparser) | The key is `User` (everyone else) |
 
-## Adding it, and checking it
+`IniOptions` is that set of decisions as one value.
 
-```bash
-novo pkg add ini-nv            # into your novo.toml
-novo pkg build                 # type- and effect-check the package
-novo test --isolate tests/iniread_tests.nv
+| Field | Default here | What it decides |
+| --- | --- | --- |
+| `delimiters` | `=` and `:` | Which characters separate a key from its value |
+| `comment_prefixes` | `#` and `;` | Which characters start a whole-line comment |
+| `inline_comment_prefixes` | none | Which characters start a comment after a value |
+| `continuations` | on | Whether a further-indented line continues the value above it |
+| `lowercase_keys` | off | Whether a key is lowercased on the way in |
+| `implicit_section` | `""` | The section a key before the first header goes into, or a refusal |
+| `allow_empty_values` | on | Whether a delimiter with nothing after it is an empty value |
+| `allow_no_value` | off | Whether a bare key with no delimiter is an entry |
+| `duplicate_keys` | refuse | What the same key twice means |
+| `duplicate_sections` | refuse | What the same header twice means |
+| `default_section` | `DEFAULT` | The fallback section's name, or `""` for none |
+| `trim_values` | on | Whether whitespace is stripped from both ends of a value |
+
+Three constructors are three answers somebody already depends on.
+`iniread.defaults` is this package's own. `iniread.configparser`
+lowercases keys, refuses a key before the first header, and keeps
+`[DEFAULT]`. `iniread.rust_ini` treats `;` as an inline comment, keeps
+every duplicate, has no fallback section, and puts a key before the
+first header into the unnamed section.
+
+A **document** keeps the file's trivia: a section holds its entries in
+order, and an entry holds the comments written above it, the comment
+written after it, and its own delimiter. `iniwrite.round_trip` of a
+parsed document is the text it was parsed from.
+
+**Interpolation** is a reference from one value to another.
+configparser has two spellings, and this package has both plus the
+option of neither.
+
+| Style | Spelling | What it can reach |
+| --- | --- | --- |
+| `IniInterpBasic` | `%(name)s` | This section, then the fallback section |
+| `IniInterpExtended` | `${name}`, `${section:name}` | Anywhere in the document |
+| `IniInterpNone` | — | Nothing. `%` and `$` are ordinary characters |
+
+`IniInterpNone` is what a systemd unit or a `.gitconfig` needs: neither
+format has interpolation and both use `%` and `$` for something else.
+
+## Install
+
+```
+novo pkg add ini-nv
 ```
 
-`novo test` is red today and that is the point of the release: every
-assertion fails with `not implemented: ini-nv.<module>.<fn>`.  They turn
-green one at a time as bodies land.
-
-## The one example that will work
+## Example
 
 ```novo
 use inidoc
+use inierror
 use iniread
+use iniwrite
 
 fn main() [io]
-    match iniread.read("[web]\nport = 8080\nhost = localhost\n")
-        Err(f)  => println("line ${f.line}")
-        Ok(doc) => println(inidoc.get(doc, "web", "port") ?? "unset")
-    // 8080
+    let text = "[web]\n# the port the server listens on\nport = 8080\nhost = localhost\n"
+
+    // Read the text the way Python's configparser would read it.
+    match iniread.parse(text, iniread.configparser())
+        Err(f)  => println(inierror.message(f))
+        Ok(doc) =>
+            // One value, exactly as the file wrote it.
+            println(inidoc.get(doc, "web", "port") ?? "unset")
+
+            // Change that value and write the file back out. The
+            // comment above the key and the order of the file stay.
+            let next = inidoc.set(doc, "web", "port", "9090")
+            println(iniwrite.render(next, iniwrite.standard()))
 ```
 
-## The load-bearing interface
+Build and test with `novo pkg build` and `novo test`. Today `novo test`
+fails on purpose: every test reaches a `not implemented:
+ini-nv.<module>.<fn>` panic. The tests are the specification the
+implementation will have to satisfy.
 
-`inidoc.IniDocument` — and specifically the fact that it **keeps the
-trivia**.
+## What the package contains
 
-An INI file is almost always a file a person wrote and will read again.
-It has comments explaining why a timeout is 45, blank lines grouping
-related keys, and an order that means something.  So a section holds its
-entries in order, an entry holds the comments written above it and the
-inline comment written after it and its own delimiter, and
+| Module | Contents |
+| --- | --- |
+| `iniread` | The dialect, the three named constructors, the parse, and the line classifier the parse is built on. |
+| `inidoc` | The document, the section and the entry, the reads over them, and the edits that keep the comments. |
+| `iniinterp` | The two interpolation spellings: expand one value, expand a document, list the references in a value, and find every dangling one. |
+| `iniwrite` | Rendering: the byte-for-byte round trip, three styles, a render into a caller's buffer, and the length one would take. |
+| `inicfg` | The conversion into config-core-nv's value tree, and back out of it. |
+| `inierror` | Every reason a file has no reading under a dialect, each with the line and the column. |
 
-```novo norun:pseudo
-iniread.parse(text, options)  |>  iniwrite.round_trip
+## How to choose an entry point
+
+**`iniread.read` takes text and this package's own dialect.** One
+argument, for a caller who has no particular tool's file.
+
+**`iniread.parse` takes text and a dialect.** Use it, with
+`iniread.configparser` or `iniread.rust_ini`, when you know which
+program wrote the file.
+
+**`inidoc` is how a document is read and changed.** `get` answers a
+value, `set` changes one and leaves the comment above it, and
+`get_all` answers every value of a repeated key.
+
+**`iniinterp.value` is `inidoc.get` with the references resolved.** It
+is a separate call on purpose; see rule 3.
+
+**`inicfg.to_config` is the one call a layered configuration reader
+makes.** It answers a table of sections, each a table of keys.
+
+## The rules a user needs
+
+1. **The dialect decides what a line means, and there is no right
+   default.** `a = b ;c` is a value of `b ;c` under this package's own
+   dialect and under configparser's, and a value of `b` under
+   rust-ini's.
+2. **An inline comment is off by default.** `url = http://x/#frag`
+   keeps its fragment. That is configparser's behaviour, and it
+   surprises people. `iniread.rust_ini` turns `;` on.
+3. **`inidoc.get` answers the raw text, always.** configparser expands
+   references on the way out of its `get`, so a program that reads a
+   value, changes something else and writes the file back has replaced
+   every reference with whatever it resolved to that day. Here the
+   expansion is `iniinterp.value`, a call of its own.
+4. **A chain of references resolves and a cycle is named.** `a = %(b)s`
+   with `b = %(a)s` answers `IniInterpolationCycle` at the value that
+   closed the loop, rather than a depth limit.
+   `iniinterp.INTERPOLATION_DEPTH_LIMIT` is 10.
+5. **`iniinterp.check` finds every dangling reference in one pass.**
+   Run it at startup, so that a setting nobody reads until Tuesday does
+   not fail then.
+6. **The same key twice has four possible meanings, and the document
+   carries which.**
+
+   | Policy | Whose default it is |
+   | --- | --- |
+   | `IniDupRefuse` | configparser with `strict=True`, and this package |
+   | `IniDupFirstWins` | most hand-written C parsers |
+   | `IniDupLastWins` | configparser with `strict=False`; a repeated section merges |
+   | `IniDupKeepAll` | rust-ini's multi-value properties, and a systemd unit's repeated `After=` |
+
+7. **`inidoc.get_all` is how a repeated key is read**, and a repeated
+   key is the only list INI has. It becomes a list in the config tree.
+8. **A parsed document rendered back is the file it came from.**
+   `iniwrite.round_trip` makes no style decisions. `iniwrite.render`
+   takes a style, for a document a caller built rather than read.
+9. **`inidoc.set` keeps the comment and `inidoc.remove` takes it
+   away.** A changed value keeps the sentence that explains it; a
+   removed key takes its explanation with it, because a file holding
+   the explanation of a setting nobody has is worse than one that lost
+   both.
+10. **A section name is one key, dots included.** `[a.b]` is a section
+    whose name contains a dot, not a table `a` holding a table `b`. INI
+    has no nesting, and two tools that write `[a.b]` mean different
+    things by it.
+11. **Every value is a string.** `inicfg.to_config` answers strings
+    throughout. `inicfg.to_config_typed` runs each value through
+    config-core-nv's own `cfgvalue.infer_scalar`, so a port number from
+    an INI file and one from the environment are typed by the same
+    rule.
+12. **The fallback section is not flattened by default.**
+    `IniDefaultsAsSection` keeps `[DEFAULT]` as a section of its own.
+    Copying its values into every section would make a file's fallback
+    outrank a later layer's explicit setting once config-core-nv merges
+    them, which is backwards. `IniDefaultsFlattened` is there for a
+    caller reading one file and layering nothing.
+13. **`[]` is refused.** An empty section name is a section nothing can
+    ask for. configparser accepts it and rust-ini does not.
+14. **A key before the first section header is refused unless the
+    dialect names a section for it.** `IniOptions.implicit_section` is
+    that name, and a `.gitconfig` fragment or a `pip.conf` snippet
+    needs it set.
+15. **Every fault carries a 1-based line and a 1-based byte column.**
+    The column is 1 when the whole line is the problem. `inierror`
+    never sees the source text, so a message that quotes the offending
+    line is built by the caller.
+16. **`inierror.kind_name` is stable across releases.** The spellings
+    are lower case with hyphens, such as `missing-delimiter`, because
+    programs quote them in their own messages and tests.
+17. **Text is UTF-8.** novo-lang's `Str` is UTF-8, so a caller holding
+    other bytes decodes them first.
+
+## What is not included
+
+- **A type inference of this package's own.** See rule 11.
+- **Nesting.** See rule 10.
+- **An encoding option.** See rule 17.
+- **`.gitconfig`'s subsections**, written `[remote "origin"]`. That is
+  a real dialect this package does not have. `iniread.classify` is
+  public so a caller can write the few lines that do, without deriving
+  the comment and continuation rules again.
+- **TOML.** It is a different format that people sometimes call INI.
+  [toml-nv](https://novo-lang.org/packages/toml-nv) is that package.
+- **Any input or output.** Nothing here opens a file. The caller holds
+  the text, and a renderer answers a string or appends to a buffer the
+  caller owns.
+- **A microcontroller build.** A document is a list of lists of
+  strings, which is not what a microcontroller has.
+
+## Related packages
+
+- [config-core-nv](https://novo-lang.org/packages/config-core-nv) is
+  the value tree and the precedence rules a layered configuration is
+  made of. This package depends on it so that `inicfg.to_config` can
+  answer that tree directly. It is `core` and has no dependencies of
+  its own, so a program that only wanted to read an INI file pays for
+  one package of arithmetic.
+- [config-nv](https://novo-lang.org/packages/config-nv) stacks several
+  sources of configuration in precedence order. `inicfg.to_config` is
+  the whole of its INI adapter.
+- [toml-nv](https://novo-lang.org/packages/toml-nv),
+  [yaml-nv](https://novo-lang.org/packages/yaml-nv) and
+  [dotenv-nv](https://novo-lang.org/packages/dotenv-nv) are the other
+  configuration formats on the registry. TOML and YAML carry types and
+  nesting; a `.env` file is a flat list of strings with shell quoting.
+- [datafile-nv](https://novo-lang.org/packages/datafile-nv) answers
+  which directory an application's INI file lives in on each platform.
+
+## Tests
+
+```bash
+novo test --isolate tests/iniread_tests.nv   # 8 tests: the dialects and the parse
+novo test --isolate tests/inicfg_tests.nv    # 8 tests: the config tree
 ```
 
-is the identity on a file nobody changed.  A tool that reads somebody's
-`~/.config/app.ini`, changes a port and writes it back hands them a
-one-line diff.
+The vectors are configparser's own documented examples: the
+`ssh_config`-shaped file its page opens with, and its two interpolation
+examples, one for `BasicInterpolation` and one for
+`ExtendedInterpolation`. A reviewer can check them against that page
+rather than against this package. `rust-ini`'s documented behaviour is
+the reference for `iniread.rust_ini`.
 
-Everything else follows from that.  `inidoc.set` is in the document
-module rather than in the writer, because it changes a value and leaves
-the comment that explains it.  `inidoc.remove` takes the comment WITH
-the key, because a file left holding an explanation of a setting nobody
-has is worse than one that lost both.  And the cost of the whole shape —
-a lookup is a scan rather than a hash probe — is not a cost on a file of
-forty keys.
+The suite asserts that `a = b ;c` reads two ways under two dialects,
+that configparser lowercases a key and this package's own dialect does
+not, that all four duplicate policies do what they say, that a repeated
+key becomes a list in the config tree, that a parsed document renders
+back to its own text, that a reference chain resolves, and that a cycle
+is reported as a cycle.
 
-## Interpolation is a step, not something a read does
+The tests compile today and fail at run, each on the `not implemented`
+panic that is its body. That is the expected state of an interface
+release. They turn green one at a time as bodies land.
 
-configparser expands `%(name)s` on the way **out of `get`**.  So a
-program that reads a value, changes something unrelated and writes the
-file back has silently replaced every reference with whatever it
-resolved to that day.
+## Implementation status
 
-Here `inidoc.get` answers the **raw** text, always, and a caller that
-wants the expansion calls `iniinterp.value`.  Both spellings are
-supported because configparser has both:
+Nothing is implemented, apart from the three constants. Every function
+here is declared with its signature and its effect row, and every body
+is a `todo()`.
 
-| style | spelling | scope |
-| --- | --- | --- |
-| `IniInterpBasic` | `%(name)s` | this section, then the fallback |
-| `IniInterpExtended` | `${name}`, `${section:name}` | anywhere in the document |
-| `IniInterpNone` | — | `%` and `$` are ordinary characters |
-
-`IniInterpNone` is what a caller reading a systemd unit or a
-`.gitconfig` wants: neither format has interpolation, and both use `%`
-and `$` for something else.
-
-A chain resolves — configparser's own example has `my_pictures`
-pointing at `my_dir` pointing at `home_dir` — and a **cycle is named as
-one**.  `a = %(b)s` with `b = %(a)s` answers `IniInterpolationCycle` at
-the value that closed the loop, not "depth limit exceeded", because to
-the person who typed it those are one problem with one fix.
-`iniinterp.check` finds every dangling reference in a document in one
-pass, which is what a start-up path should run before a setting nobody
-reads until Tuesday fails then.
-
-## The four duplicate policies
-
-All four are somebody's default, so all four are here, per document:
-
-| policy | who does this |
+| Item | Implemented |
 | --- | --- |
-| `IniDupRefuse` | configparser with `strict=True` — its default, and ours |
-| `IniDupFirstWins` | most hand-written C parsers |
-| `IniDupLastWins` | configparser with `strict=False`; a repeated section merges |
-| `IniDupKeepAll` | rust-ini's multi-value properties; a systemd unit's repeated `After=` |
-
-`inidoc.get_all` is what reads the last one, and it is the reason a
-repeated key becomes a `CfgList` on the way into the config tree — a
-repeated key really is a list, and it is the only list INI has.
-
-## The config tree, and the three decisions it makes
-
-`inicfg.to_config` is the one call `config-nv`'s ini adapter makes.  It
-answers a `config-core-nv` `ConfigValue`: a table of sections, each a
-table of keys.  Three of its decisions could reasonably have gone the
-other way, so all three are arguments or named in the signature.
-
-**The fallback is not flattened by default.**  configparser's
-`[DEFAULT]` supplies a value to every section that lacks one.  Copying
-those values into each section would make a file's own fallback outrank
-a *later layer's* explicit setting once `config-core-nv` merges — a
-default from `/etc` beating a value from the environment, which is
-exactly backwards.  So `IniDefaultsAsSection` is the default;
-`IniDefaultsFlattened` is there for a caller reading one file and
-layering nothing.
-
-**A section name is one key, dots included.**  `[a.b]` becomes the key
-`"a.b"`, not a table `a` holding a table `b`.  INI has no nesting, two
-tools that both write `[a.b]` mean different things by it, and a tree
-built by splitting would silently merge sections a reader can see are
-distinct.
-
-**Every value is a string unless the caller asks otherwise.**  INI has
-no types.  `to_config` answers `CfgStr` throughout; `to_config_typed`
-runs each value through `config-core-nv`'s own `cfgvalue.infer_scalar`
-— its rule and not a second one, which is the point: a port number that
-arrives from an INI file and one that arrives from the environment then
-reach `get_int` the same way.
-
-## Why this depends on config-core-nv, and why that is affordable
-
-`config-core-nv` is `core` and has **no dependencies of its own**, so a
-consumer who only wanted to read an INI file pays for one package of
-pure arithmetic.  The reverse direction is what that package's own
-manifest refuses: an adapter living there would put a parser in the
-closure of a package whose subject is precedence.
-
-What it buys is that `config-nv` gains its third format by calling one
-function rather than by carrying a second copy of the mapping rules
-above — and that the rules live next to the parser whose output they
-describe.
-
-## What is deliberately not here
-
-**Type inference of its own.**  Every value is a string.
-`config-core-nv.cfgvalue.infer_scalar` is where a string becomes typed,
-and using its rule rather than a second one is why an INI value and an
-environment variable behave the same downstream.
-
-**Nesting.**  `[a.b]` is a section whose name contains a dot.  See
-above.
-
-**Encodings.**  novo-lang's `Str` is UTF-8, so this reads UTF-8.  A
-caller holding other bytes decodes them first.
-
-**`.gitconfig`'s subsections** — `[remote "origin"]` — and **TOML.**
-The first is a real dialect this package does not have; `iniread.classify`
-is public so that a caller can write the fifteen lines that do, without
-re-deriving the comment and continuation rules.  The second is a
-different format that people call INI, and it is toml-nv.
-
-## The layer, and why
-
-`core`.  A line scan over text the caller already holds, a document of
-strings, and a renderer that answers a string or appends to the caller's
-buffer.  No function declares an effect: the file is `config-nv`'s to
-open, and this package never learns where it came from.
-
-**No device claim.**  There is no `tests/embedded_probe.nv`: the
-document is a list of lists of strings, which is not what a
-microcontroller has.
-
-## The reference implementation
-
-Python's `configparser` (PSF) and Rust's `rust-ini` (MIT), both named
-rather than blended — `iniread.configparser()` and
-`iniread.rust_ini()` are each meant to answer what that library answers.
-The test vectors are configparser's own documented examples: the
-`ssh_config`-shaped file its page opens with, and the two interpolation
-examples for `BasicInterpolation` and `ExtendedInterpolation`.  A
-reviewer can check them against that page rather than against this
-package.
-
-## What depends on this
-
-`config-nv`, for its third format — `inicfg.to_config` is the whole of
-its ini adapter.  The row on the grid says so: *"the third format
-config-nv layers"*.
-
-## Status
-
-| function | implemented |
-| --- | --- |
+| `inidoc.DEFAULT_SECTION`, `inicfg.CONFIG_DEPTH`, `iniinterp.INTERPOLATION_DEPTH_LIMIT` | yes (they are constants) |
 | `inierror.fault`, `.kind_name`, `.message` | no |
 | `inidoc.empty`, `.empty_with` | no |
 | `inidoc.section_names`, `.section`, `.has_section` | no |
@@ -242,3 +299,9 @@ config-nv layers"*.
 | `iniwrite.check`, `.rendered_len` | no |
 | `inicfg.defaults_name`, `.to_config`, `.to_config_typed` | no |
 | `inicfg.section_to_config`, `.from_config`, `.is_writable` | no |
+
+## Licence
+
+Apache-2.0. See `LICENSE`.
+
+<!-- docs/writing-a-readme.md is the style guide for this page. -->
