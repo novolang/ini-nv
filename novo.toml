@@ -1,6 +1,6 @@
 [package]
 name        = "ini-nv"
-version     = "0.0.2"
+version     = "0.0.3"
 description = "The configparser and rust-ini dialects of INI, with the differences between them as a value the caller picks: sections, both delimiters, both comment characters, line continuations, four duplicate-key policies, configparser's two interpolation spellings as a step of their own, a writer that puts the comments and the order back, and one call that turns a document into a config-core-nv tree.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 

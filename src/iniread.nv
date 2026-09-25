@@ -62,51 +62,51 @@ pub struct IniOptions
     // `=` and `:` — is configparser's default and this package's.
     // `[61]` alone is what a caller reading a `.env`-adjacent file
     // wants, because a URL's `https://` should not split a key.
-    delimiters: [Int]
+    var delimiters: [Int]
     // Which characters start a WHOLE-LINE comment.  `[35, 59]` — `#`
     // and `;` — everywhere.
-    comment_prefixes: [Int]
+    var comment_prefixes: [Int]
     // Which characters start an INLINE comment, after a value.  EMPTY
     // by default, which is configparser's behaviour and surprises
     // everybody: `url = http://x/#frag` keeps its fragment.  rust-ini
     // strips `;`, so `rust_ini()` sets this to `[59]`.  A file written
     // by one and read by the other loses or keeps text, which is why
     // this is a switch and not a rule.
-    inline_comment_prefixes: [Int]
+    var inline_comment_prefixes: [Int]
     // Join a line that is indented further than its key onto the value
     // above it, separated by a newline.  configparser's behaviour, and
     // how a multi-line value is written.
-    continuations: Bool
+    var continuations: Bool
     // Lowercase every key on the way in — configparser's `optionxform`.
     // FALSE here by default, because a round trip that changes a key is
     // not a round trip; `configparser()` sets it.
-    lowercase_keys: Bool
+    var lowercase_keys: Bool
     // Accept a key-value line before any section header, and put it in
     // a section of this name.  `""` refuses such a line with
     // `IniKeyBeforeSection`, which is configparser's behaviour.  A
     // `.gitconfig` fragment or a `pip.conf` snippet needs it set.
-    implicit_section: Str
+    var implicit_section: Str
     // Accept a key with a delimiter and nothing after it as a key whose
     // value is the empty string.  configparser's `allow_no_value` is
     // the stronger form — a key with NO delimiter at all — and is the
     // next field.
-    allow_empty_values: Bool
+    var allow_empty_values: Bool
     // Accept a line that is a bare key with no delimiter, giving it a
     // value of `""`.  configparser's `allow_no_value=True`, and what a
     // `.desktop` or an `smb.conf` flag line needs.
-    allow_no_value: Bool
+    var allow_no_value: Bool
     // What to do about the same key twice in one section.
-    duplicate_keys: IniDuplicates
+    var duplicate_keys: IniDuplicates
     // What to do about the same section header twice.
-    duplicate_sections: IniDuplicates
+    var duplicate_sections: IniDuplicates
     // The section whose keys are a fallback for every other section.
     // `"DEFAULT"` is configparser's; `""` turns the fallback off, which
     // is rust-ini's behaviour and what a systemd unit needs.
-    default_section: Str
+    var default_section: Str
     // Strip whitespace from both ends of every value.  True in every
     // implementation; here because a caller reading a file whose values
     // are fixed-width columns needs it off.
-    trim_values: Bool
+    var trim_values: Bool
 
 // What this package would choose: both delimiters, both comment
 // characters, no inline comments, continuations on, keys preserved,
