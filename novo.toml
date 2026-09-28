@@ -1,6 +1,6 @@
 [package]
 name        = "ini-nv"
-version     = "0.0.3"
+version     = "0.0.4"
 description = "The configparser and rust-ini dialects of INI, with the differences between them as a value the caller picks: sections, both delimiters, both comment characters, line continuations, four duplicate-key policies, configparser's two interpolation spellings as a step of their own, a writer that puts the comments and the order back, and one call that turns a document into a config-core-nv tree.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
@@ -49,4 +49,4 @@ novo        = ">= 0.8.9"
 # `todo()` — so a program assembling this closure builds and panics on
 # the first call, which is the interfaces-first milestone working as
 # designed.
-config-core-nv = "^0.0.1"
+config-core-nv = "^0.1.0"
